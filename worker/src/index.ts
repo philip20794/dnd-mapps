@@ -130,5 +130,7 @@ export const handleWorkerRequest = async (
 }
 
 export default {
-  fetch: handleWorkerRequest,
+  fetch(request: Request, env: WorkerEnv) {
+    return handleWorkerRequest(request, env)
+  },
 } satisfies ExportedHandler<WorkerEnv>
