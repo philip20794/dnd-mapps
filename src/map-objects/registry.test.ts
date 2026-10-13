@@ -23,6 +23,8 @@ describe('Map Object Library', () => {
     expect(registry.has('daylight-area')).toBe(true)
     expect(registry.has('candle')).toBe(true)
     expect(registry.has('wooden-door')).toBe(true)
+    expect(registry.has('cargo-crane')).toBe(true)
+    expect(registry.has('dungeon-prop')).toBe(true)
   })
 
   it('laedt wiederverwendbare Boden-Presets', () => {
@@ -58,6 +60,8 @@ describe('Map Object Library', () => {
     expect(registry.requirePreset('rock', 'rubble-pile').defaults.blocksMovement).toBe(false)
     expect(registry.requirePreset('wooden-barricade', 'thorn-deadfall').defaults.width).toBe(3.2)
     expect(registry.requirePreset('decoration', 'road-sign').defaults.variant).toBe('road-sign')
+    expect(registry.requirePreset('cargo-crane', 'wooden-cargo-crane').defaults.width).toBe(6)
+    expect(registry.requirePreset('dungeon-prop', 'frog-idol').defaults.variant).toBe('frog-idol')
   })
 
   it('ueberschreibt einzelne Boden-Preset-Eigenschaften', () => {

@@ -96,6 +96,25 @@ test('zeigt die Kapitel-4-Spinnenwaldkarte ohne Seitenfehler', async ({ page }) 
   expect(pageErrors).toEqual([])
 })
 
+test('zeigt den Burg-Naerytar-Höhlen-Dungeon ohne Seitenfehler', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  page.on('console', (message) => {
+    if (message.type() === 'error') pageErrors.push(message.text())
+  })
+
+  await page.goto('/')
+  await page.getByTestId('map-select').selectOption('burg-naerytar-dungeon')
+  await expect(page.getByTestId('map-select')).toHaveValue('burg-naerytar-dungeon')
+  await expect(page.getByTestId('map-select').locator('option:checked')).toHaveText(
+    'Burg Naerytar – Höhlen-Dungeon',
+  )
+  await expect(page.getByTestId('map-canvas').locator('canvas')).toBeVisible()
+  await expect(page.getByTestId('zoom-status')).not.toHaveText('100%')
+
+  expect(pageErrors).toEqual([])
+})
+
 test('erstellt per Button eine neue Zufallskarte', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))

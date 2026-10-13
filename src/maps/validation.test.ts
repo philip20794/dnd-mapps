@@ -22,6 +22,7 @@ describe('Kartenvalidierung', () => {
     const mapIds = loadMapDefinitions().map((map) => map.id)
 
     expect(mapIds).toContain('kapitel-3-barikarde')
+    expect(mapIds).toContain('burg-naerytar-dungeon')
     expect(mapIds).toContain('kapitel-3-waldweg')
     expect(mapIds).toContain('kapitel-4-spinnenwald-ueberfall')
   })
