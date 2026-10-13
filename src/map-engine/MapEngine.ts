@@ -18,7 +18,13 @@ import {
 import type { PlacedToken } from '@/types/tokens'
 import { fitCameraToMap, panCamera, resetCamera, zoomCameraAt } from './camera/camera'
 import { AnimationManager } from './animations/AnimationManager'
-import { isTokenMoveAllowed, movementSegmentsForMap } from './collision/movement'
+import {
+  createMovementSegmentIndex,
+  isTokenMoveAllowed,
+  movementSegmentsForMap,
+  movementSegmentsNear,
+  type MovementSegmentIndex,
+} from './collision/movement'
 import { FogRenderer, type FogRenderState } from './fog/FogRenderer'
 import {
   clientToLocal,
@@ -39,8 +45,18 @@ import {
   spellEffectLocalHandles,
   worldPointToEffectLocal,
 } from './spells/geometry'
-import { TokenRenderer } from './tokens/TokenRenderer'
-import { combineVisibilityPolygonsWithLights } from './visibility/visibility'
+import {
+  TokenDragFrameQueue,
+  TokenRenderer,
+  type TokenRendererHandlers,
+} from './tokens/TokenRenderer'
+import {
+  combineVisibilityPolygonsWithPreparedGeometry,
+  prepareVisibilityGeometry,
+  visibilityTokenStateKey,
+  type PreparedVisibilityGeometry,
+} from './visibility/visibility'
+import type { FogLightSource } from './lighting/lightSources'
 import { MaterialRenderer, type RenderedMaterialLayers } from './materials/MaterialRenderer'
 import {
   createStaticObjectChunks,
@@ -117,6 +133,22 @@ export class MapEngine {
   private currentVisiblePolygons: readonly Polygon[] = []
   private panState: PanState | null = null
   private spacePressed = false
+  private movementSegmentIndex: MovementSegmentIndex | null = null
+  private preparedVisibilityGeometry: PreparedVisibilityGeometry | null = null
+  private cachedFogLightSources: readonly FogLightSource[] | null = null
+  private visibilityRevision = 0
+  private cachedVisibilityInputKey: string | null = null
+  private currentDoorStateKey = ''
+  private readonly tokenDragQueue = new TokenDragFrameQueue()
+  private readonly tokenRendererHandlers: TokenRendererHandlers = {
+    onSelect: (tokenId) => this.handlers.onTokenSelect(tokenId),
+    onMoveEnd: (tokenId, position) => this.handlers.onTokenMove(tokenId, position),
+    onLongPress: (tokenId, screenPoint) => {
+      this.handlers.onTokenLongPress(tokenId, screenPoint)
+      this.renderTokens()
+    },
+    constrainMove: (tokenId, from, proposed) => this.constrainTokenMove(tokenId, from, proposed),
+  }
 
   public constructor(
     private readonly host: HTMLElement,
@@ -166,6 +198,9 @@ export class MapEngine {
     this.map = map
     this.doorStates = doorStates
     this.currentLevelId = levelId
+    this.currentDoorStateKey = this.doorStateKey(map, doorStates)
+    this.invalidateMovementGeometry()
+    this.invalidateVisibilityGeometry()
     this.currentVisiblePolygons = []
     this.renderMap()
     this.renderTokens()
@@ -178,6 +213,8 @@ export class MapEngine {
       return
     }
     this.currentLevelId = levelId
+    this.invalidateMovementGeometry()
+    this.invalidateVisibilityGeometry()
     this.currentVisiblePolygons = []
     this.renderMap()
     this.renderTokens()
@@ -186,14 +223,17 @@ export class MapEngine {
   }
 
   public setTokens(tokens: readonly PlacedToken[], selectedTokenId: string | null): void {
-    const onlySelectionChanged = this.tokens === tokens
+    const tokensChanged = this.tokens !== tokens
+    const selectionChanged = this.selectedTokenId !== selectedTokenId
     this.tokens = tokens
     this.selectedTokenId = selectedTokenId
-    if (!(onlySelectionChanged && this.tokenRenderer.isPointerActive)) {
+    if (tokensChanged || selectionChanged) {
       this.renderTokens()
     }
-    this.renderSpellEffects()
-    this.updateVisibility()
+    if (tokensChanged) {
+      this.renderSpellEffects()
+      this.updateVisibility()
+    }
   }
 
   public setSpellEffects(
@@ -222,7 +262,15 @@ export class MapEngine {
   }
 
   public setDoorStates(doorStates: Readonly<Record<string, DoorState>>): void {
+    const doorStateKey = this.map ? this.doorStateKey(this.map, doorStates) : ''
+    if (doorStateKey === this.currentDoorStateKey) {
+      this.doorStates = doorStates
+      return
+    }
     this.doorStates = doorStates
+    this.currentDoorStateKey = doorStateKey
+    this.invalidateMovementGeometry()
+    this.invalidateVisibilityGeometry()
     if (this.map) {
       this.renderMap()
       this.renderTokens()
@@ -233,6 +281,7 @@ export class MapEngine {
 
   public setSettings(settings: RuntimeSettings): void {
     const gridVisibilityChanged = this.settings.grid.visible !== settings.grid.visible
+    const lightingChanged = this.settings.lighting.enabled !== settings.lighting.enabled
     this.settings = settings
     this.animations.setEnabled(settings.animations.enabled)
     this.animations.setReducedMotion(settings.animations.reduced)
@@ -244,13 +293,20 @@ export class MapEngine {
       this.renderSpellEffects()
       this.renderFog()
     }
+    if (lightingChanged) {
+      this.cachedFogLightSources = null
+      this.cachedVisibilityInputKey = null
+      this.updateVisibility()
+    }
   }
 
   public setFogState(fogState: EngineFogState): void {
     const activated = !this.fogState.enabled && fogState.enabled
     this.fogState = fogState
     if (activated) {
+      this.cachedVisibilityInputKey = null
       this.updateVisibility()
+      this.renderFog()
       return
     }
     this.renderFog()
@@ -294,6 +350,7 @@ export class MapEngine {
   }
 
   public destroy(): void {
+    this.cancelPendingTokenDrag()
     this.clearSpellEffectLongPressTimer()
     this.handlers.onSpellEffectDragStateChange(false)
     this.host.classList.remove('map-engine-host')
@@ -301,6 +358,7 @@ export class MapEngine {
     this.staticChunkRenderer?.destroy()
     this.staticChunkRenderer = null
     this.cleanupRuntimeObjects()
+    this.fogRenderer.destroy()
     this.animations.destroy()
     this.resources.clear()
     this.app?.destroy(true, { children: true })
@@ -317,7 +375,7 @@ export class MapEngine {
     this.renderedMaterials = null
     this.cleanupRuntimeObjects()
     for (const layerName of layerOrder) {
-      if (layerName !== 'tokens' && layerName !== 'selection') {
+      if (layerName !== 'tokens' && layerName !== 'selection' && layerName !== 'fog') {
         this.layers[layerName]
           .removeChildren()
           .forEach((child) => child.destroy({ children: true }))
@@ -471,15 +529,7 @@ export class MapEngine {
       },
       normalizeMapRotation(this.settings.mapRotation),
       this.settings.grid,
-      {
-        onSelect: this.handlers.onTokenSelect,
-        onMoveEnd: this.handlers.onTokenMove,
-        onLongPress: (tokenId, screenPoint) => {
-          this.handlers.onTokenLongPress(tokenId, screenPoint)
-          this.renderTokens()
-        },
-        constrainMove: this.constrainTokenMove,
-      },
+      this.tokenRendererHandlers,
     )
   }
 
@@ -531,27 +581,78 @@ export class MapEngine {
   }
 
   private updateVisibility(): void {
-    if (!this.map) {
+    if (!this.map || !this.fogState.enabled) {
+      if (this.currentVisiblePolygons.length > 0) {
+        this.currentVisiblePolygons = []
+      }
+      this.renderFog()
       return
     }
 
-    this.currentVisiblePolygons = combineVisibilityPolygonsWithLights(
-      this.activeTokens(),
+    const activeTokens = this.activeTokens()
+    const inputKey = this.visibilityInputKey(activeTokens)
+    if (inputKey === this.cachedVisibilityInputKey) {
+      return
+    }
+    this.cachedVisibilityInputKey = inputKey
+    this.currentVisiblePolygons = combineVisibilityPolygonsWithPreparedGeometry(
+      activeTokens,
       this.map,
-      this.doorStates,
-      this.settings.lighting.enabled
-        ? collectFogLightSources(this.map, this.doorStates, this.registry, this.currentLevelId)
-        : [],
+      this.visibilityGeometryForCurrentMap(),
+      this.fogLightSourcesForCurrentMap(),
       this.currentLevelId,
     )
 
-    if (this.fogState.enabled) {
-      this.handlers.onExplore(this.map.id, this.currentLevelId, this.currentVisiblePolygons)
-      if (this.fogState.persistExploration && this.currentVisiblePolygons.length > 0) {
-        return
-      }
+    this.handlers.onExplore(this.map.id, this.currentLevelId, this.currentVisiblePolygons)
+    if (this.fogState.persistExploration && this.currentVisiblePolygons.length > 0) {
+      return
     }
     this.renderFog()
+  }
+
+  private visibilityGeometryForCurrentMap(): PreparedVisibilityGeometry {
+    if (!this.map) return { segments: [] }
+    if (!this.preparedVisibilityGeometry) {
+      this.preparedVisibilityGeometry = prepareVisibilityGeometry(
+        this.map,
+        this.doorStates,
+        this.currentLevelId,
+      )
+    }
+    return this.preparedVisibilityGeometry
+  }
+
+  private fogLightSourcesForCurrentMap(): readonly FogLightSource[] {
+    if (!this.map || !this.settings.lighting.enabled) return []
+    if (!this.cachedFogLightSources) {
+      this.cachedFogLightSources = collectFogLightSources(
+        this.map,
+        this.doorStates,
+        this.registry,
+        this.currentLevelId,
+      )
+    }
+    return this.cachedFogLightSources
+  }
+
+  private visibilityInputKey(tokens: readonly PlacedToken[]): string {
+    return `${this.visibilityRevision}|${this.settings.lighting.enabled ? 1 : 0}|${visibilityTokenStateKey(tokens)}`
+  }
+
+  private invalidateVisibilityGeometry(): void {
+    this.preparedVisibilityGeometry = null
+    this.cachedFogLightSources = null
+    this.cachedVisibilityInputKey = null
+    this.visibilityRevision += 1
+  }
+
+  private doorStateKey(
+    map: MapDefinition,
+    doorStates: Readonly<Record<string, DoorState>>,
+  ): string {
+    return map.doors
+      .map((door) => `${door.id}:${doorStates[door.id] ?? door.defaultState}`)
+      .join('|')
   }
 
   private renderFog(): void {
@@ -944,15 +1045,16 @@ export class MapEngine {
       return
     }
     if (this.map) {
+      if (this.tokenRenderer.isPointerActive) {
+        const bounds = this.host.getBoundingClientRect()
+        this.queueTokenDrag(clientToLocal({ x: event.clientX, y: event.clientY }, bounds))
+        event.preventDefault()
+        return
+      }
       const bounds = this.host.getBoundingClientRect()
       const local = clientToLocal({ x: event.clientX, y: event.clientY }, bounds)
       if (
-        this.tokenRenderer.dragToScreenPoint(local, this.map.gridSize, {
-          onSelect: this.handlers.onTokenSelect,
-          onMoveEnd: this.handlers.onTokenMove,
-          onLongPress: this.handlers.onTokenLongPress,
-          constrainMove: this.constrainTokenMove,
-        })
+        this.tokenRenderer.dragToScreenPoint(local, this.map.gridSize, this.tokenRendererHandlers)
       ) {
         event.preventDefault()
         return
@@ -982,21 +1084,17 @@ export class MapEngine {
     }
     if (this.map) {
       const tokenPointerWasActive = this.tokenRenderer.isPointerActive
+      if (tokenPointerWasActive) {
+        const bounds = this.host.getBoundingClientRect()
+        this.flushTokenDrag(clientToLocal({ x: event.clientX, y: event.clientY }, bounds))
+      }
       const finishedTokenDrag = this.tokenRenderer.finishDrag(
         this.settings.grid,
         this.map.gridSize,
-        {
-          onSelect: this.handlers.onTokenSelect,
-          onMoveEnd: this.handlers.onTokenMove,
-          onLongPress: this.handlers.onTokenLongPress,
-          constrainMove: this.constrainTokenMove,
-        },
+        this.tokenRendererHandlers,
       )
       if (finishedTokenDrag) {
         event.preventDefault()
-      }
-      if (tokenPointerWasActive) {
-        this.renderTokens()
       }
     }
 
@@ -1047,9 +1145,48 @@ export class MapEngine {
       return from
     }
 
-    const blockers = movementSegmentsForMap(this.map, this.doorStates, this.currentLevelId)
     const tokenRadius = Math.max(0.2, token.size / 2)
+    const blockers = movementSegmentsNear(
+      this.movementIndexForCurrentMap(),
+      from,
+      proposed,
+      tokenRadius,
+    )
     return isTokenMoveAllowed(from, proposed, tokenRadius, blockers, this.map) ? proposed : from
+  }
+
+  private movementIndexForCurrentMap(): MovementSegmentIndex {
+    if (!this.map) {
+      return createMovementSegmentIndex([])
+    }
+    if (!this.movementSegmentIndex) {
+      this.movementSegmentIndex = createMovementSegmentIndex(
+        movementSegmentsForMap(this.map, this.doorStates, this.currentLevelId),
+      )
+    }
+    return this.movementSegmentIndex
+  }
+
+  private invalidateMovementGeometry(): void {
+    this.movementSegmentIndex = null
+  }
+
+  private queueTokenDrag(point: PixelPoint): void {
+    this.tokenDragQueue.schedule(point, (nextPoint) => this.applyTokenDrag(nextPoint))
+  }
+
+  private flushTokenDrag(finalPoint?: PixelPoint): void {
+    this.tokenDragQueue.flush((point) => this.applyTokenDrag(point), finalPoint)
+  }
+
+  private cancelPendingTokenDrag(): void {
+    this.tokenDragQueue.cancel()
+  }
+
+  private applyTokenDrag(point: PixelPoint): void {
+    if (this.map) {
+      this.tokenRenderer.dragToScreenPoint(point, this.map.gridSize, this.tokenRendererHandlers)
+    }
   }
 
   private clampSpellTarget(

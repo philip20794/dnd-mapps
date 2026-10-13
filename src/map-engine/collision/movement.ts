@@ -3,6 +3,13 @@ import type { DoorState, MapDefinition } from '@/maps/api'
 import type { GridPoint, Segment } from '@/types/geometry'
 
 const EPSILON = 0.000001
+const DEFAULT_MOVEMENT_INDEX_CELL_SIZE = 4
+
+export interface MovementSegmentIndex {
+  readonly cellSize: number
+  readonly segments: readonly Segment[]
+  readonly cells: ReadonlyMap<string, readonly Segment[]>
+}
 
 const orientation = (a: GridPoint, b: GridPoint, c: GridPoint): number =>
   (b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y)
@@ -93,6 +100,61 @@ export const movementSegmentsForMap = (
     )
     .map((door) => door.segment),
 ]
+
+function indexCellKey(x: number, y: number): string {
+  return `${x},${y}`
+}
+
+export const createMovementSegmentIndex = (
+  segments: readonly Segment[],
+  cellSize = DEFAULT_MOVEMENT_INDEX_CELL_SIZE,
+): MovementSegmentIndex => {
+  const cells = new Map<string, Segment[]>()
+  for (const segment of segments) {
+    const minX = Math.floor(Math.min(segment.a.x, segment.b.x) / cellSize)
+    const maxX = Math.floor(Math.max(segment.a.x, segment.b.x) / cellSize)
+    const minY = Math.floor(Math.min(segment.a.y, segment.b.y) / cellSize)
+    const maxY = Math.floor(Math.max(segment.a.y, segment.b.y) / cellSize)
+    for (let y = minY; y <= maxY; y += 1) {
+      for (let x = minX; x <= maxX; x += 1) {
+        const key = indexCellKey(x, y)
+        const cell = cells.get(key)
+        if (cell) {
+          cell.push(segment)
+        } else {
+          cells.set(key, [segment])
+        }
+      }
+    }
+  }
+  return { cellSize, segments, cells }
+}
+
+export const movementSegmentsNear = (
+  index: MovementSegmentIndex,
+  from: GridPoint,
+  to: GridPoint,
+  tokenRadius: number,
+): readonly Segment[] => {
+  const clearance = Math.max(0.08, tokenRadius * 0.75)
+  const minX = Math.floor((Math.min(from.x, to.x) - clearance) / index.cellSize)
+  const maxX = Math.floor((Math.max(from.x, to.x) + clearance) / index.cellSize)
+  const minY = Math.floor((Math.min(from.y, to.y) - clearance) / index.cellSize)
+  const maxY = Math.floor((Math.max(from.y, to.y) + clearance) / index.cellSize)
+  const candidates: Segment[] = []
+  const seen = new Set<Segment>()
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      for (const segment of index.cells.get(indexCellKey(x, y)) ?? []) {
+        if (!seen.has(segment)) {
+          seen.add(segment)
+          candidates.push(segment)
+        }
+      }
+    }
+  }
+  return candidates
+}
 
 export const isInsideMapBounds = (
   point: GridPoint,

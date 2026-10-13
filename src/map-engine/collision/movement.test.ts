@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { MapDefinition } from '@/maps/api'
-import { isTokenMoveAllowed, movementSegmentsForMap, segmentsIntersect } from './movement'
+import {
+  createMovementSegmentIndex,
+  isTokenMoveAllowed,
+  movementSegmentsForMap,
+  movementSegmentsNear,
+  segmentsIntersect,
+} from './movement'
 
 const testMap: MapDefinition = {
   id: 'collision-map',
@@ -67,5 +73,22 @@ describe('Token-Bewegungskollision', () => {
 
   it('blockiert Bewegung außerhalb der Karte', () => {
     expect(isTokenMoveAllowed({ x: 1, y: 1 }, { x: -1, y: 1 }, 0.5, [], testMap)).toBe(false)
+  })
+
+  it('fragt aus dem Kollisionsindex nur Hindernisse entlang der Bewegung ab', () => {
+    const nearbyWall = { a: { x: 5, y: 0 }, b: { x: 5, y: 4 } }
+    const distantWall = { a: { x: 30, y: 0 }, b: { x: 30, y: 10 } }
+    const index = createMovementSegmentIndex([nearbyWall, distantWall], 4)
+
+    expect(movementSegmentsNear(index, { x: 3, y: 2 }, { x: 6, y: 2 }, 0.5)).toEqual([
+      nearbyWall,
+    ])
+  })
+
+  it('berücksichtigt den Token-Radius bei der Indexabfrage', () => {
+    const closeWall = { a: { x: 8, y: 0 }, b: { x: 8, y: 4 } }
+    const index = createMovementSegmentIndex([closeWall], 4)
+
+    expect(movementSegmentsNear(index, { x: 6, y: 2 }, { x: 7, y: 2 }, 2)).toEqual([closeWall])
   })
 })

@@ -24,7 +24,20 @@ export interface VisibilityInput {
   readonly rotationDegrees: number
   readonly visionAngleDegrees: number | null
   readonly segments: readonly Segment[]
+  readonly intersectionSegments?: readonly Segment[]
 }
+
+export interface PreparedVisibilityGeometry {
+  readonly segments: readonly Segment[]
+}
+
+export const visibilityTokenStateKey = (tokens: readonly PlacedToken[]): string =>
+  tokens
+    .map(
+      (token) =>
+        `${token.id}:${token.position.x}:${token.position.y}:${token.rotation}:${token.visionRange}:${token.visionAngle ?? 'all'}:${token.visionEnabled ? 1 : 0}`,
+    )
+    .join('|')
 
 const cross = (a: GridPoint, b: GridPoint): number => a.x * b.y - a.y * b.x
 
@@ -251,9 +264,10 @@ export const computeVisibilityPolygon = (input: VisibilityInput): Polygon => {
     })
 
   const points: GridPoint[] = []
+  const intersectionSegments = input.intersectionSegments ?? input.segments
   for (const angle of angles) {
     let closest: RayHit | null = null
-    for (const segment of input.segments) {
+    for (const segment of intersectionSegments) {
       const hit = raySegmentIntersection(input.origin, angle, segment, input.range)
       if (hit && (!closest || hit.distance < closest.distance)) {
         closest = hit
@@ -282,6 +296,32 @@ export const visibilitySegmentsForMap = (
     .map((wall) => ({ a: wall.a, b: wall.b })),
   ...doorVisibilitySegments(map.doors, doorStates, map, levelId),
 ]
+
+export const prepareVisibilityGeometry = (
+  map: MapDefinition,
+  doorStates: Readonly<Record<string, DoorState>>,
+  levelId = getDefaultLevelId(map),
+): PreparedVisibilityGeometry => ({
+  segments: visibilitySegmentsForMap(map, doorStates, levelId),
+})
+
+export const visibilitySegmentsNear = (
+  segments: readonly Segment[],
+  origin: GridPoint,
+  range: number,
+): readonly Segment[] => {
+  const minX = origin.x - range
+  const maxX = origin.x + range
+  const minY = origin.y - range
+  const maxY = origin.y + range
+  return segments.filter(
+    (segment) =>
+      Math.max(segment.a.x, segment.b.x) >= minX &&
+      Math.min(segment.a.x, segment.b.x) <= maxX &&
+      Math.max(segment.a.y, segment.b.y) >= minY &&
+      Math.min(segment.a.y, segment.b.y) <= maxY,
+  )
+}
 
 export const computeTokenVisibility = (
   token: PlacedToken,
@@ -319,13 +359,34 @@ export const combineVisibilityPolygonsWithLights = (
   doorStates: Readonly<Record<string, DoorState>>,
   lightSources: readonly FogLightSource[],
   levelId = getDefaultLevelId(map),
+): readonly Polygon[] =>
+  combineVisibilityPolygonsWithPreparedGeometry(
+    tokens,
+    map,
+    prepareVisibilityGeometry(map, doorStates, levelId),
+    lightSources,
+    levelId,
+  )
+
+export const combineVisibilityPolygonsWithPreparedGeometry = (
+  tokens: readonly PlacedToken[],
+  map: MapDefinition,
+  geometry: PreparedVisibilityGeometry,
+  lightSources: readonly FogLightSource[],
+  levelId = getDefaultLevelId(map),
 ): readonly Polygon[] => {
-  const segments = visibilitySegmentsForMap(map, doorStates, levelId)
+  const segments = geometry.segments
   const tokenPolygons = tokens
     .filter((token) => (token.levelId ?? getDefaultLevelId(map)) === levelId)
     .map((token) =>
       token.visionEnabled && token.visionRange > 0
-        ? {
+        ? (() => {
+            const nearbySegments = visibilitySegmentsNear(
+              segments,
+              token.position,
+              token.visionRange,
+            )
+            return {
             token,
             polygon: computeVisibilityPolygon({
               origin: token.position,
@@ -333,8 +394,10 @@ export const combineVisibilityPolygonsWithLights = (
               rotationDegrees: token.rotation,
               visionAngleDegrees: token.visionAngle,
               segments,
+              intersectionSegments: nearbySegments,
             }),
-          }
+            }
+          })()
         : null,
     )
     .filter(

@@ -36,4 +36,20 @@ describe('Fog of War Zustand', () => {
     const exploredState = recordExploration(defaultFogState, 'map', [polygon])
     expect(clearExplorationForMap(exploredState, 'map').exploredByMap.map).toBeUndefined()
   })
+
+  it('speichert identische Sichtdaten nicht erneut', () => {
+    const exploredState = recordExploration(defaultFogState, 'map', [polygon])
+    expect(recordExploration(exploredState, 'map', [polygon])).toBe(exploredState)
+  })
+
+  it('begrenzt die Erkundung weiterhin auf die neuesten 160 Polygone', () => {
+    const polygons = Array.from({ length: 161 }, (_value, index) => [
+      { x: index, y: 0 },
+      { x: index + 1, y: 0 },
+      { x: index + 1, y: 1 },
+    ])
+    const state = recordExploration(defaultFogState, 'map', polygons)
+    expect(state.exploredByMap.map).toHaveLength(160)
+    expect(state.exploredByMap.map?.[0]).toEqual(polygons[1])
+  })
 })

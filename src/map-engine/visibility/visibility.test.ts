@@ -4,10 +4,15 @@ import type { PlacedToken } from '@/types/tokens'
 import {
   combineVisibilityPolygons,
   combineVisibilityPolygonsWithLights,
+  combineVisibilityPolygonsWithPreparedGeometry,
+  computeVisibilityPolygon,
   doorVisibilitySegments,
   polygonContainsPoint,
+  prepareVisibilityGeometry,
   raySegmentIntersection,
   visibilitySegmentsForMap,
+  visibilitySegmentsNear,
+  visibilityTokenStateKey,
 } from './visibility'
 import alteKrypta from '@/maps/alte-krypta.map'
 
@@ -86,6 +91,51 @@ describe('Sichtberechnung', () => {
     const closed = visibilitySegmentsForMap(baseMap, { door: 'closed' })
     const open = visibilitySegmentsForMap(baseMap, { door: 'open' })
     expect(closed.length).toBe(open.length + 1)
+  })
+
+  it('verwendet vorbereitete Geometrie und invalidiert sie über Türzustände', () => {
+    const closed = prepareVisibilityGeometry(baseMap, { door: 'closed' })
+    const open = prepareVisibilityGeometry(baseMap, { door: 'open' })
+    expect(closed.segments).toHaveLength(open.segments.length + 1)
+
+    const direct = combineVisibilityPolygonsWithLights([token('a', 2, 5)], baseMap, {}, [])
+    const prepared = combineVisibilityPolygonsWithPreparedGeometry(
+      [token('a', 2, 5)],
+      baseMap,
+      prepareVisibilityGeometry(baseMap, {}),
+      [],
+    )
+    expect(prepared).toEqual(direct)
+  })
+
+  it('ändert den Sichtschlüssel nur bei sichtrelevanten Token-Daten', () => {
+    const original = token('a', 2, 5)
+    expect(visibilityTokenStateKey([{ ...original, name: 'Anderer Name', color: '#ff0000' }])).toBe(
+      visibilityTokenStateKey([original]),
+    )
+    expect(visibilityTokenStateKey([{ ...original, position: { x: 3, y: 5 } }])).not.toBe(
+      visibilityTokenStateKey([original]),
+    )
+  })
+
+  it('reduziert die Hindernisprüfung auf Segmente im Sichtbereich', () => {
+    const nearby = { a: { x: 4, y: 0 }, b: { x: 4, y: 4 } }
+    const distant = Array.from({ length: 100 }, (_value, index) => ({
+      a: { x: 20 + index, y: 0 },
+      b: { x: 20 + index, y: 4 },
+    }))
+    const candidates = visibilitySegmentsNear([nearby, ...distant], { x: 2, y: 2 }, 4)
+    expect(candidates).toEqual([nearby])
+    const input = {
+      origin: { x: 2, y: 2 },
+      range: 4,
+      rotationDegrees: 0,
+      visionAngleDegrees: null,
+      segments: [nearby, ...distant],
+    }
+    expect(computeVisibilityPolygon({ ...input, intersectionSegments: candidates })).toEqual(
+      computeVisibilityPolygon(input),
+    )
   })
 
   it('berechnet Sicht für den Starttoken der Alten Krypta', () => {

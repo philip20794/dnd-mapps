@@ -12,6 +12,19 @@ export const defaultFogState: FogStateData = {
   exploredByMap: {},
 }
 
+const polygonsEqual = (left: Polygon, right: Polygon): boolean =>
+  left.length === right.length &&
+  left.every((point, index) => point.x === right[index]?.x && point.y === right[index]?.y)
+
+const endsWithPolygons = (
+  existing: readonly Polygon[],
+  additions: readonly Polygon[],
+): boolean =>
+  additions.length <= existing.length &&
+  additions.every((polygon, index) =>
+    polygonsEqual(existing[existing.length - additions.length + index] ?? [], polygon),
+  )
+
 export const recordExploration = (
   state: FogStateData,
   mapId: string,
@@ -22,6 +35,9 @@ export const recordExploration = (
   }
 
   const existing = state.exploredByMap[mapId] ?? []
+  if (endsWithPolygons(existing, visiblePolygons)) {
+    return state
+  }
   const combined = [...existing, ...visiblePolygons].slice(-160)
 
   return {

@@ -132,7 +132,6 @@ watch(
   () => {
     engine?.setTokens(props.tokens, props.selectedTokenId)
   },
-  { deep: true },
 )
 
 watch(
@@ -189,7 +188,6 @@ watch(
   (fogState) => {
     engine?.setFogState(fogState)
   },
-  { deep: true },
 )
 
 onBeforeUnmount(() => {
