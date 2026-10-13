@@ -1,0 +1,19 @@
+{
+  "name": "dnd-mapps-server",
+  "private": true,
+  "type": "module",
+  "main": "lib/server/src/firebase.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "firebase-functions": "^7.4.0",
+    "openai": "^7.23.0"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.0"
+  }
+}

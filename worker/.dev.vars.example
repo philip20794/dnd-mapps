@@ -1,0 +1,10 @@
+# Local Worker secrets/configuration. Copy to .dev.vars; never commit the real file.
+OPENAI_API_KEY=
+OPENAI_ADMIN_KEY=
+OPENAI_PROJECT_ID=
+
+# Optional application budget in USD per UTC day. This is not a free-tier value.
+AI_DAILY_BUDGET_USD=
+
+# Comma-separated, exact browser origins. No wildcard matching.
+ALLOWED_ORIGINS=http://localhost:5173

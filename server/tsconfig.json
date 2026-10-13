@@ -1,0 +1,26 @@
+{
+  "include": ["src/**/*.ts", "../src/map-generation/**/*.ts"],
+  "exclude": [
+    "src/**/*.test.ts",
+    "../src/**/*.test.ts",
+    "../src/map-generation/aiPlannerClient.ts",
+    "../src/map-generation/mapDefinitionAdapter.ts",
+    "../src/map-generation/service.ts"
+  ],
+  "compilerOptions": {
+    "rootDir": "..",
+    "outDir": "lib",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "esModuleInterop": true,
+    "noEmit": false,
+    "declaration": false,
+    "sourceMap": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "types": ["node"],
+    "skipLibCheck": true
+  }
+}
