@@ -303,11 +303,12 @@ export class MapEngine {
 
   public setFogState(fogState: EngineFogState): void {
     const activated = !this.fogState.enabled && fogState.enabled
+    const persistenceActivated =
+      fogState.enabled && !this.fogState.persistExploration && fogState.persistExploration
     this.fogState = fogState
-    if (activated) {
+    if (activated || persistenceActivated) {
       this.cachedVisibilityInputKey = null
       this.updateVisibility()
-      this.renderFog()
       return
     }
     this.renderFog()
@@ -605,9 +606,6 @@ export class MapEngine {
     )
 
     this.handlers.onExplore(this.map.id, this.currentLevelId, this.currentVisiblePolygons)
-    if (this.fogState.persistExploration && this.currentVisiblePolygons.length > 0) {
-      return
-    }
     this.renderFog()
   }
 
