@@ -1,5 +1,5 @@
 import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from 'idb'
-import { defaultFogState } from '@/map-engine/fog/fogState'
+import { defaultFogState, migrateFogState } from '@/map-engine/fog/fogState'
 import { defaultRuntimeSettings } from '@/types/settings'
 import { SESSION_SCHEMA_VERSION, type SessionSnapshot } from '@/types/session'
 
@@ -27,13 +27,26 @@ const createEmptySnapshot = (): SessionSnapshot => ({
   savedAt: new Date().toISOString(),
 })
 
-const isSessionSnapshot = (value: unknown): value is SessionSnapshot => {
+const isStoredSessionSnapshot = (
+  value: unknown,
+): value is Omit<SessionSnapshot, 'version' | 'fog'> & { readonly version: 1 | 2; readonly fog: unknown } => {
   if (!value || typeof value !== 'object') {
     return false
   }
 
-  const candidate = value as Partial<SessionSnapshot>
-  return candidate.version === SESSION_SCHEMA_VERSION && Array.isArray(candidate.tokens)
+  const candidate = value as { readonly version?: unknown; readonly tokens?: unknown }
+  return (candidate.version === 1 || candidate.version === 2) && Array.isArray(candidate.tokens)
+}
+
+export const migrateSessionSnapshot = (value: unknown): SessionSnapshot => {
+  if (!isStoredSessionSnapshot(value)) {
+    throw new Error('Der gespeicherte Sitzungszustand ist beschädigt.')
+  }
+  return {
+    ...value,
+    version: SESSION_SCHEMA_VERSION,
+    fog: migrateFogState(value.fog),
+  }
 }
 
 export class SessionPersistence {
@@ -49,10 +62,7 @@ export class SessionPersistence {
     if (snapshot === undefined) {
       return null
     }
-    if (!isSessionSnapshot(snapshot)) {
-      throw new Error('Der gespeicherte Sitzungszustand ist beschädigt.')
-    }
-    return snapshot
+    return migrateSessionSnapshot(snapshot)
   }
 
   public async save(snapshot: SessionSnapshot): Promise<void> {

@@ -8,6 +8,7 @@ import type { RuntimeSettings } from '@/types/settings'
 import type { PlacedSpellEffect, SpellEffectPatch, SpellPlacement } from '@/types/spells'
 import type { PlacedToken } from '@/types/tokens'
 import type { VerticalTransitionConfig } from '@/map-objects'
+import type { ExplorationMask } from '@/map-engine/fog/fogState'
 
 const props = defineProps<{
   map: MapDefinition | null
@@ -21,7 +22,7 @@ const props = defineProps<{
   settings: RuntimeSettings
   fogEnabled: boolean
   persistExploration: boolean
-  exploredPolygons: readonly Polygon[]
+  exploredMask: ExplorationMask | null
 }>()
 
 const emit = defineEmits<{
@@ -51,7 +52,7 @@ let resizeObserver: ResizeObserver | null = null
 const engineFogState = computed<EngineFogState>(() => ({
   enabled: props.fogEnabled,
   persistExploration: props.persistExploration,
-  explored: props.exploredPolygons,
+  explored: props.exploredMask,
 }))
 
 const syncMap = (): void => {

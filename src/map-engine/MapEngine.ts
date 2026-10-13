@@ -26,6 +26,7 @@ import {
   type MovementSegmentIndex,
 } from './collision/movement'
 import { FogRenderer, type FogRenderState } from './fog/FogRenderer'
+import type { ExplorationMask } from './fog/fogState'
 import {
   clientToLocal,
   hexCentersForBounds,
@@ -68,7 +69,7 @@ import {
 export interface EngineFogState {
   readonly enabled: boolean
   readonly persistExploration: boolean
-  readonly explored: readonly Polygon[]
+  readonly explored: ExplorationMask | null
 }
 
 export interface MapEngineHandlers {
@@ -129,7 +130,7 @@ export class MapEngine {
   private spellEffectLongPressTimer: number | null = null
   private doorStates: Readonly<Record<string, DoorState>> = {}
   private settings: RuntimeSettings = defaultRuntimeSettings
-  private fogState: EngineFogState = { enabled: false, persistExploration: true, explored: [] }
+  private fogState: EngineFogState = { enabled: false, persistExploration: true, explored: null }
   private currentVisiblePolygons: readonly Polygon[] = []
   private panState: PanState | null = null
   private spacePressed = false

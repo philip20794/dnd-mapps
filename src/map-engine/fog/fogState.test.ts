@@ -2,54 +2,87 @@ import { describe, expect, it } from 'vitest'
 import {
   clearExplorationForMap,
   defaultFogState,
+  isExploredCell,
+  migrateFogState,
   recordExploration,
   visibleAndExploredPolygons,
 } from './fogState'
 
-const polygon = [
-  { x: 0, y: 0 },
-  { x: 1, y: 0 },
-  { x: 1, y: 1 },
-]
+function square(x: number, y = 0) {
+  return [
+    { x, y },
+    { x: x + 1, y },
+    { x: x + 1, y: y + 1 },
+    { x, y: y + 1 },
+  ]
+}
 
 describe('Fog of War Zustand', () => {
-  it('speichert erkundete Sichtflächen bei aktivierter Erkundung', () => {
-    const state = recordExploration(defaultFogState, 'map', [polygon])
-    expect(state.exploredByMap.map).toHaveLength(1)
+  it('speichert erkundete Sicht als Rastermaske', () => {
+    const state = recordExploration(defaultFogState, 'map:ground', [square(0)])
+    const mask = state.exploredMasksByMap['map:ground']
+    expect(mask?.cellCount).toBe(4)
+    expect(isExploredCell(mask ?? null, 0, 0)).toBe(true)
   })
 
-  it('speichert keine früheren Sichtflächen, wenn Erkundung deaktiviert ist', () => {
-    const state = recordExploration({ ...defaultFogState, persistExploration: false }, 'map', [
-      polygon,
+  it('speichert keine Erkundung, wenn Persistenz deaktiviert ist', () => {
+    const state = recordExploration(
+      { ...defaultFogState, persistExploration: false },
+      'map:ground',
+      [square(0)],
+    )
+    expect(state.exploredMasksByMap['map:ground']).toBeUndefined()
+  })
+
+  it('fügt identische Zellen nicht erneut hinzu', () => {
+    const state = recordExploration(defaultFogState, 'map:ground', [square(0)])
+    expect(recordExploration(state, 'map:ground', [square(0)])).toBe(state)
+  })
+
+  it('behält Erkundung nach mehr als 160 Schritten vollständig', () => {
+    let state = defaultFogState
+    for (let index = 0; index < 200; index += 1) {
+      state = recordExploration(state, 'map:ground', [square(index)])
+    }
+    const mask = state.exploredMasksByMap['map:ground'] ?? null
+    expect(isExploredCell(mask, 0, 0)).toBe(true)
+    expect(isExploredCell(mask, 399, 0)).toBe(true)
+    expect(mask?.cellCount).toBe(800)
+  })
+
+  it('trennt Karten und Ebenen voneinander', () => {
+    let state = recordExploration(defaultFogState, 'map-a:ground', [square(0)])
+    state = recordExploration(state, 'map-a:cellar', [square(4)])
+    state = recordExploration(state, 'map-b:ground', [square(8)])
+    expect(Object.keys(state.exploredMasksByMap)).toEqual([
+      'map-a:ground',
+      'map-a:cellar',
+      'map-b:ground',
     ])
-    expect(state.exploredByMap.map).toBeUndefined()
-  })
-
-  it('trennt aktuelle und erkundete Sicht', () => {
-    const exploredState = recordExploration(defaultFogState, 'map', [polygon])
-    const result = visibleAndExploredPolygons(exploredState, 'map', [polygon])
-    expect(result.visible).toHaveLength(1)
-    expect(result.explored).toHaveLength(1)
+    expect(isExploredCell(state.exploredMasksByMap['map-a:cellar'] ?? null, 8, 0)).toBe(true)
   })
 
   it('setzt erkundete Bereiche pro Karte zurück', () => {
-    const exploredState = recordExploration(defaultFogState, 'map', [polygon])
-    expect(clearExplorationForMap(exploredState, 'map').exploredByMap.map).toBeUndefined()
+    const state = recordExploration(defaultFogState, 'map:ground', [square(0)])
+    expect(clearExplorationForMap(state, 'map:ground').exploredMasksByMap['map:ground']).toBeUndefined()
   })
 
-  it('speichert identische Sichtdaten nicht erneut', () => {
-    const exploredState = recordExploration(defaultFogState, 'map', [polygon])
-    expect(recordExploration(exploredState, 'map', [polygon])).toBe(exploredState)
+  it('migriert die alte Polygonhistorie verlustfrei in eine Maske', () => {
+    const migrated = migrateFogState({
+      enabled: true,
+      persistExploration: true,
+      exploredByMap: { 'map:ground': [square(0), square(3)] },
+    })
+    const mask = migrated.exploredMasksByMap['map:ground'] ?? null
+    expect(migrated.enabled).toBe(true)
+    expect(isExploredCell(mask, 0, 0)).toBe(true)
+    expect(isExploredCell(mask, 6, 0)).toBe(true)
   })
 
-  it('begrenzt die Erkundung weiterhin auf die neuesten 160 Polygone', () => {
-    const polygons = Array.from({ length: 161 }, (_value, index) => [
-      { x: index, y: 0 },
-      { x: index + 1, y: 0 },
-      { x: index + 1, y: 1 },
-    ])
-    const state = recordExploration(defaultFogState, 'map', polygons)
-    expect(state.exploredByMap.map).toHaveLength(160)
-    expect(state.exploredByMap.map?.[0]).toEqual(polygons[1])
+  it('liefert aktuelle Sicht und persistierte Maske getrennt', () => {
+    const state = recordExploration(defaultFogState, 'map:ground', [square(0)])
+    const result = visibleAndExploredPolygons(state, 'map:ground', [square(2)])
+    expect(result.visible).toHaveLength(1)
+    expect(result.explored?.cellCount).toBe(4)
   })
 })

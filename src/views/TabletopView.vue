@@ -18,6 +18,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useSpellEffectStore } from '@/stores/spellEffects'
 import { useTokenStore } from '@/stores/tokens'
 import type { Polygon } from '@/types/geometry'
+import type { ExplorationMask } from '@/map-engine/fog/fogState'
 import { defaultCameraState, type RuntimeSettings } from '@/types/settings'
 import { findSpellAreaPreset, type SpellEffectPatch, type SpellPlacement } from '@/types/spells'
 import { tokenTemplates, type TokenPatch } from '@/types/tokens'
@@ -36,8 +37,10 @@ const currentExplorationKey = computed(() =>
   currentMap.value && currentLevelId.value ? `${currentMap.value.id}:${currentLevelId.value}` : '',
 )
 const currentDoorStates = computed(() => mapStore.currentDoorStates)
-const currentExplored = computed<readonly Polygon[]>(() =>
-  currentExplorationKey.value ? (fogStore.exploredByMap[currentExplorationKey.value] ?? []) : [],
+const currentExplored = computed<ExplorationMask | null>(() =>
+  currentExplorationKey.value
+    ? (fogStore.exploredMasksByMap[currentExplorationKey.value] ?? null)
+    : null,
 )
 const currentSpellEffects = computed(() => {
   if (!currentMap.value || !currentLevelId.value) {
@@ -425,8 +428,8 @@ const setSnapToGrid = (snap: boolean): void => {
 }
 
 const recordExploration = (mapId: string, levelId: string, polygons: readonly Polygon[]): void => {
-  fogStore.record(`${mapId}:${levelId}`, polygons)
-  if (fogStore.enabled && fogStore.persistExploration) {
+  const changed = fogStore.record(`${mapId}:${levelId}`, polygons)
+  if (changed && fogStore.enabled && fogStore.persistExploration) {
     scheduleAutoSave()
   }
 }
@@ -494,7 +497,7 @@ const recordExploration = (mapId: string, levelId: string, polygons: readonly Po
         :settings="settingsStore.$state"
         :fog-enabled="fogStore.enabled"
         :persist-exploration="fogStore.persistExploration"
-        :explored-polygons="currentExplored"
+        :explored-mask="currentExplored"
         @drop-token="addToken"
         @select-token="tokenStore.setSelectedToken"
         @move-token="moveToken"

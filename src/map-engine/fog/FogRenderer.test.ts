@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { fogPolygonsFingerprint } from './FogRenderer'
+import {
+  addPolygonsToExplorationMask,
+  createEmptyExplorationMask,
+  explorationMaskFingerprint,
+} from './fogState'
 
 describe('FogRenderer Cache-Schlüssel', () => {
   it('erkennt geänderte Erkundungsdaten auch bei identischer Array-Länge', () => {
@@ -15,5 +20,16 @@ describe('FogRenderer Cache-Schlüssel', () => {
     expect(fogPolygonsFingerprint(polygons)).toBe(
       fogPolygonsFingerprint(polygons.map((polygon) => polygon.map((point) => ({ ...point })))),
     )
+  })
+
+  it('unterscheidet Masken mit gleicher Zellzahl aber anderem Inhalt', () => {
+    const first = addPolygonsToExplorationMask(createEmptyExplorationMask(), [[
+      { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 },
+    ]])
+    const shifted = addPolygonsToExplorationMask(createEmptyExplorationMask(), [[
+      { x: 4, y: 4 }, { x: 5, y: 4 }, { x: 5, y: 5 }, { x: 4, y: 5 },
+    ]])
+    expect(first.cellCount).toBe(shifted.cellCount)
+    expect(explorationMaskFingerprint(first)).not.toBe(explorationMaskFingerprint(shifted))
   })
 })

@@ -1,8 +1,12 @@
 import { Container, Sprite, Texture } from 'pixi.js'
 import type { MapDefinition } from '@/maps/api'
 import type { GridPoint, Polygon } from '@/types/geometry'
-
-const FOG_CELL_SIZE = 0.5
+import {
+  FOG_CELL_SIZE,
+  explorationMaskFingerprint,
+  isExploredCell,
+  type ExplorationMask,
+} from './fogState'
 
 export const fogPolygonFingerprint = (polygon: Polygon): string =>
   polygon.map((point) => `${point.x},${point.y}`).join(';')
@@ -61,13 +65,10 @@ export interface FogRenderState {
   readonly enabled: boolean
   readonly persistExploration: boolean
   readonly visible: readonly Polygon[]
-  readonly explored: readonly Polygon[]
+  readonly explored: ExplorationMask | null
 }
 
 export class FogRenderer {
-  private exploredCells = new Set<number>()
-  private cachedMapKey: string | null = null
-  private cachedExploredFingerprints: readonly string[] = []
   private currentTexture: Texture | null = null
   private currentSprite: Sprite | null = null
   private canvas: HTMLCanvasElement | null = null
@@ -85,19 +86,20 @@ export class FogRenderer {
     const xCells = Math.ceil(map.width / FOG_CELL_SIZE)
     const yCells = Math.ceil(map.height / FOG_CELL_SIZE)
     const mapKey = `${map.id}:${map.width}:${map.height}:${map.gridSize}:${FOG_CELL_SIZE}`
-    const stateKey = `${mapKey}:${state.persistExploration ? 1 : 0}:${fogPolygonsFingerprint(state.visible)}:${state.persistExploration ? fogPolygonsFingerprint(state.explored) : ''}`
+    const exploredKey = state.persistExploration
+      ? explorationMaskFingerprint(state.explored)
+      : 'none'
+    const stateKey = `${mapKey}:${state.persistExploration ? 1 : 0}:${fogPolygonsFingerprint(state.visible)}:${exploredKey}`
     if (stateKey === this.renderedStateKey && this.currentSprite) {
       this.currentSprite.visible = true
       if (this.currentSprite.parent !== layer) layer.addChild(this.currentSprite)
       return
     }
 
-    this.ensureResources(layer, map, xCells, yCells, mapKey)
+    this.ensureResources(layer, map, xCells, yCells)
     if (!this.context || !this.imageData || !this.currentTexture || !this.currentSprite) return
     const visibleCells = this.rasterizePolygons(state.visible, map, xCells)
-    const exploredCells = state.persistExploration
-      ? this.exploredCellsFor(map, state.explored, xCells)
-      : new Set<number>()
+    const exploredMask = state.persistExploration ? state.explored : null
     const pixels = this.imageData.data
     pixels.fill(0)
 
@@ -110,7 +112,7 @@ export class FogRenderer {
           continue
         }
 
-        const explored = exploredCells.has(key)
+        const explored = isExploredCell(exploredMask, xIndex, yIndex)
         pixels[offset] = explored ? 0 : 2
         pixels[offset + 1] = explored ? 0 : 4
         pixels[offset + 2] = explored ? 0 : 7
@@ -141,7 +143,6 @@ export class FogRenderer {
     map: MapDefinition,
     xCells: number,
     yCells: number,
-    mapKey: string,
   ): void {
     const resourcesMatch =
       this.canvas?.width === xCells &&
@@ -168,39 +169,6 @@ export class FogRenderer {
     this.currentSprite.width = map.width * map.gridSize
     this.currentSprite.height = map.height * map.gridSize
     if (this.currentSprite.parent !== layer) layer.addChild(this.currentSprite)
-    if (this.cachedMapKey !== mapKey) {
-      this.exploredCells = new Set<number>()
-      this.cachedExploredFingerprints = []
-      this.cachedMapKey = mapKey
-    }
-  }
-
-  private exploredCellsFor(
-    map: MapDefinition,
-    explored: readonly Polygon[],
-    xCells: number,
-  ): ReadonlySet<number> {
-    const fingerprints = explored.map(fogPolygonFingerprint)
-    let commonPrefixLength = 0
-    while (
-      commonPrefixLength < this.cachedExploredFingerprints.length &&
-      commonPrefixLength < fingerprints.length &&
-      this.cachedExploredFingerprints[commonPrefixLength] === fingerprints[commonPrefixLength]
-    ) {
-      commonPrefixLength += 1
-    }
-    if (commonPrefixLength < this.cachedExploredFingerprints.length) {
-      this.exploredCells = new Set<number>()
-      commonPrefixLength = 0
-    }
-
-    const additions = explored.slice(commonPrefixLength)
-    for (const polygon of additions) {
-      this.rasterizePolygonInto(this.exploredCells, polygon, map, xCells)
-    }
-
-    this.cachedExploredFingerprints = fingerprints
-    return this.exploredCells
   }
 
   private rasterizePolygons(
