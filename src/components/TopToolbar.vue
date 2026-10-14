@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { MapDefinition, MapLevelDefinition } from '@/maps/api'
 import type { MapRotation } from '@/types/settings'
 
@@ -45,6 +45,20 @@ const activeMapName = computed(
 )
 
 const levelMenu = ref<HTMLDetailsElement | null>(null)
+const compactToolbar = ref(false)
+let compactToolbarMedia: MediaQueryList | null = null
+
+const updateCompactToolbar = (): void => {
+  compactToolbar.value = compactToolbarMedia?.matches ?? false
+}
+
+onMounted(() => {
+  compactToolbarMedia = window.matchMedia('(max-width: 900px)')
+  updateCompactToolbar()
+  compactToolbarMedia.addEventListener('change', updateCompactToolbar)
+})
+
+onBeforeUnmount(() => compactToolbarMedia?.removeEventListener('change', updateCompactToolbar))
 
 const selectLevel = (levelId: string): void => {
   emit('selectLevel', levelId)
@@ -89,35 +103,38 @@ const selectLevel = (levelId: string): void => {
         </select>
       </div>
 
-      <button
-        type="button"
-        class="primary random-map-button"
-        data-testid="generate-random-map-button"
-        @click="emit('generateRandomMap')"
-      >
-        Zufallskarte
-      </button>
+      <details class="toolbar-more" :open="!compactToolbar">
+        <summary data-testid="toolbar-more-button" aria-label="Weitere Kartenfunktionen">Mehr</summary>
+        <div class="toolbar-more-content">
+          <button
+            type="button"
+            class="primary random-map-button"
+            data-testid="generate-random-map-button"
+            @click="emit('generateRandomMap')"
+          >
+            Zufallskarte
+          </button>
 
-      <button
-        type="button"
-        class="random-map-config-button"
-        data-testid="open-random-map-config-button"
-        @click="emit('openRandomMapConfig')"
-      >
-        Karte konfigurieren
-      </button>
+          <button
+            type="button"
+            class="random-map-config-button"
+            data-testid="open-random-map-config-button"
+            @click="emit('openRandomMapConfig')"
+          >
+            Karte konfigurieren
+          </button>
 
-      <button
-        type="button"
-        class="map-rotate-button"
-        data-testid="rotate-map-button"
-        :aria-label="`Karte um 90 Grad drehen, aktuell ${mapRotation} Grad`"
-        @click="emit('rotateMap')"
-      >
-        90 Grad drehen
-      </button>
+          <button
+            type="button"
+            class="map-rotate-button"
+            data-testid="rotate-map-button"
+            :aria-label="`Karte um 90 Grad drehen, aktuell ${mapRotation} Grad`"
+            @click="emit('rotateMap')"
+          >
+            90 Grad drehen
+          </button>
 
-      <div class="toolbar-group">
+          <div class="toolbar-group">
         <label class="inline-toggle">
           <input
             data-testid="fog-toggle"
@@ -138,9 +155,9 @@ const selectLevel = (levelId: string): void => {
         >
           {{ explorationModeLabel }}
         </button>
-      </div>
+          </div>
 
-      <div class="toolbar-group">
+          <div class="toolbar-group">
         <label class="inline-toggle">
           <input
             type="checkbox"
@@ -157,13 +174,13 @@ const selectLevel = (levelId: string): void => {
           />
           Hex einrasten
         </label>
-      </div>
+          </div>
 
-      <div class="toolbar-spacer" />
+          <div class="toolbar-spacer" />
 
-      <span class="zoom-chip" data-testid="zoom-status">{{ zoomPercent }}%</span>
+          <span class="zoom-chip" data-testid="zoom-status">{{ zoomPercent }}%</span>
 
-      <details v-if="levels.length > 1" ref="levelMenu" class="level-menu">
+          <details v-if="levels.length > 1" ref="levelMenu" class="level-menu">
         <summary data-testid="level-menu-button">
           <span data-testid="level-status">{{ activeMapName }}: {{ activeLevelName }}</span>
         </summary>
@@ -179,12 +196,12 @@ const selectLevel = (levelId: string): void => {
             {{ level.name }}
           </button>
         </div>
-      </details>
-      <span v-else-if="activeLevelName" class="zoom-chip" data-testid="level-status">
-        Ebene: {{ activeLevelName }}
-      </span>
+          </details>
+          <span v-else-if="activeLevelName" class="zoom-chip" data-testid="level-status">
+            Ebene: {{ activeLevelName }}
+          </span>
 
-      <details class="reset-menu">
+          <details class="reset-menu">
         <summary data-testid="reset-menu-button">Zurücksetzen</summary>
         <div class="reset-menu-content">
           <button type="button" data-testid="reset-camera-button" @click="emit('resetCamera')">
@@ -204,6 +221,8 @@ const selectLevel = (levelId: string): void => {
           >
             Sitzung
           </button>
+        </div>
+          </details>
         </div>
       </details>
     </template>

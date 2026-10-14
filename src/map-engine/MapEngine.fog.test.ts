@@ -156,16 +156,41 @@ describe('MapEngine Fog-Aktualisierung', () => {
     expect(combineVisibleBlockers(fields)[0]?.blockerId).toBe('wall:visible-wall')
     renderSpy.mockClear()
 
-    engine.setSettings({
-      ...defaultRuntimeSettings,
-      mapRotation: 90,
-      camera: { ...defaultRuntimeSettings.camera, zoom: 1.75 },
-    })
+    for (const mapRotation of [0, 90, 180, 270] as const) {
+      for (const zoom of [0.5, 1, 2]) {
+        engine.setSettings({
+          ...defaultRuntimeSettings,
+          mapRotation,
+          camera: { ...defaultRuntimeSettings.camera, zoom },
+        })
 
-    expect(Reflect.get(engine, 'currentVisibilityFields')).toBe(fields)
-    expect(Reflect.get(engine, 'world').rotation).toBeCloseTo(Math.PI / 2)
-    expect(Reflect.get(engine, 'world').scale.x).toBeCloseTo(1.75)
+        expect(Reflect.get(engine, 'currentVisibilityFields')).toBe(fields)
+        expect(Reflect.get(engine, 'world').rotation).toBeCloseTo((mapRotation * Math.PI) / 180)
+        expect(Reflect.get(engine, 'world').scale.x).toBeCloseTo(zoom)
+      }
+    }
     expect(renderSpy).not.toHaveBeenCalled()
+    engine.destroy()
+  })
+  it('aktualisiert Fog sofort, wenn einem vorher sichtlosen Gegner Sicht gegeben wird', () => {
+    const onExplore = vi.fn<MapEngineHandlers['onExplore']>()
+    const engine = new MapEngine(document.createElement('div'), createHandlers(onExplore))
+    engine.setMap(map, {})
+    engine.setFogState({ enabled: true, persistExploration: false, explored: null })
+    const sightlessMonster = {
+      ...token(3),
+      id: 'goblin',
+      category: 'monster' as const,
+      visionRange: 0,
+      visionEnabled: false,
+    }
+    engine.setTokens([sightlessMonster], null)
+    renderSpy.mockClear()
+
+    engine.setTokens([{ ...sightlessMonster, visionRange: 6, visionEnabled: true }], null)
+
+    expect(renderSpy).toHaveBeenCalledOnce()
+    expect(Reflect.get(engine, 'currentVisiblePolygons')).not.toEqual([])
     engine.destroy()
   })
 })

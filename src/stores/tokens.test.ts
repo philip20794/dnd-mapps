@@ -76,16 +76,17 @@ describe('Token Store', () => {
     store.moveToken(created.id, { x: 7, y: 8 })
 
     expect(created.id).toBe('token-10')
-    expect(store.tokens).toContainEqual(expect.objectContaining({ id: created.id, position: { x: 7, y: 8 } }))
+    expect(store.tokens).toContainEqual(
+      expect.objectContaining({ id: created.id, position: { x: 7, y: 8 } }),
+    )
   })
 
   it('aktualisiert Farbe und Sichtwerte über die wiederverwendbaren Aktionen', () => {
     const store = useTokenStore()
-    const token = store.addQuickToken(
-      { category: 'monster', size: 1, color: '#dc4b4b' },
-      'map-a',
-      { x: 2, y: 3 },
-    )
+    const token = store.addQuickToken({ category: 'monster', size: 1, color: '#dc4b4b' }, 'map-a', {
+      x: 2,
+      y: 3,
+    })
 
     store.updateTokenColor(token.id, '#ff6600')
     store.setTokenVisionRange(token.id, 6)
@@ -102,11 +103,10 @@ describe('Token Store', () => {
 
   it('löscht ausschließlich den angeforderten Token und räumt dessen Auswahl auf', () => {
     const store = useTokenStore()
-    const first = store.addQuickToken(
-      { category: 'player', size: 1, color: '#3f8cff' },
-      'map-a',
-      { x: 1, y: 1 },
-    )
+    const first = store.addQuickToken({ category: 'player', size: 1, color: '#3f8cff' }, 'map-a', {
+      x: 1,
+      y: 1,
+    })
     const second = store.addQuickToken(
       { category: 'monster', size: 1, color: '#dc4b4b' },
       'map-a',
@@ -119,5 +119,44 @@ describe('Token Store', () => {
     expect(store.selectedTokenId).toBe(second.id)
     store.deleteToken(second.id)
     expect(store.selectedTokenId).toBeNull()
+  })
+  it.each(['goblin', 'skeleton'])('erstellt Template-Gegner %s ohne Sicht', (kind) => {
+    const store = useTokenStore()
+    const created = store.addTokenFromTemplate(kind, 'map-a', { x: 3, y: 4 })
+
+    expect(created).toMatchObject({
+      visionRange: 0,
+      visionEnabled: false,
+      category: kind === 'goblin' ? 'monster' : 'undead',
+    })
+  })
+
+  it.each(['hero', 'mage'])('erstellt Template-Spieler %s mit aktiver Sichtweite 8', (kind) => {
+    const store = useTokenStore()
+    const created = store.addTokenFromTemplate(kind, 'map-a', { x: 3, y: 4 })
+
+    expect(created).toMatchObject({ visionRange: 8, visionEnabled: true, category: 'player' })
+  })
+
+  it('behaelt die individuelle Sicht eines wiederhergestellten NPC unveraendert', () => {
+    const store = useTokenStore()
+    store.replaceTokens([
+      {
+        id: 'npc-restored',
+        mapId: 'map-a',
+        name: 'Wache',
+        position: { x: 3, y: 4 },
+        size: 1,
+        rotation: 0,
+        visionRange: 5,
+        visionAngle: 120,
+        visionEnabled: true,
+        category: 'npc',
+        color: '#d2d7df',
+        symbol: 'W',
+      },
+    ])
+
+    expect(store.tokens[0]).toMatchObject({ visionRange: 5, visionAngle: 120, visionEnabled: true })
   })
 })

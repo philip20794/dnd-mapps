@@ -360,9 +360,36 @@ describe('Sichtberechnung', () => {
       visionAngleDegrees: null,
       segments: [nearby, ...distant],
     }
-    expect(computeVisibilityPolygon({ ...input, intersectionSegments: candidates })).toEqual(
-      computeVisibilityPolygon(input),
+    const optimized = computeVisibilityPolygon({ ...input, intersectionSegments: candidates })
+    const unfiltered = computeVisibilityPolygon(input)
+    expect(optimized.length).toBeLessThan(unfiltered.length)
+    expect(Math.min(...optimized.map((point) => point.x))).toBeCloseTo(
+      Math.min(...unfiltered.map((point) => point.x)),
     )
+    expect(Math.max(...optimized.map((point) => point.x))).toBeCloseTo(
+      Math.max(...unfiltered.map((point) => point.x)),
+    )
+    expect(polygonContainsPoint(optimized, { x: 3.5, y: 2 })).toBe(
+      polygonContainsPoint(unfiltered, { x: 3.5, y: 2 }),
+    )
+  })
+
+  it('erzeugt Strahlwinkel nur fuer die tatsaechlichen Schnittkandidaten', () => {
+    const nearby = { a: { x: 4, y: 1 }, b: { x: 4, y: 3 } }
+    const distant = Array.from({ length: 2_000 }, (_value, index) => ({
+      a: { x: 30 + index, y: 1 },
+      b: { x: 30 + index, y: 3 },
+    }))
+    const polygon = computeVisibilityPolygon({
+      origin: { x: 2, y: 2 },
+      range: 4,
+      rotationDegrees: 0,
+      visionAngleDegrees: null,
+      segments: [nearby, ...distant],
+      intersectionSegments: [nearby],
+    })
+
+    expect(polygon.length).toBeLessThanOrEqual(102)
   })
 
   it('berechnet Sicht für den Starttoken der Alten Krypta', () => {

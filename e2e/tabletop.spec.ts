@@ -306,3 +306,72 @@ test('erstellt einen Spieler über das freie Long-Press-Menü', async ({ page })
   await expect(page.getByTestId('token-name-input')).toHaveValue('Spieler')
   expect(pageErrors).toEqual([])
 })
+
+async function expectInsideViewport(
+  page: import('@playwright/test').Page,
+  locator: import('@playwright/test').Locator,
+): Promise<void> {
+  const box = await locator.boundingBox()
+  expect(box).not.toBeNull()
+  const viewport = page.viewportSize()
+  expect(viewport).not.toBeNull()
+  expect(box!.x).toBeGreaterThanOrEqual(0)
+  expect(box!.y).toBeGreaterThanOrEqual(0)
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width)
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height)
+}
+
+test('passt Toolbar, Karte und ErstellungsmenÃ¼ an alle Ziel-Viewports an', async ({ page }) => {
+  for (const viewport of [
+    { width: 320, height: 640 },
+    { width: 390, height: 844 },
+    { width: 844, height: 390 },
+    { width: 1440, height: 900 },
+  ]) {
+    await page.setViewportSize(viewport)
+    await page.goto('/')
+    await expect(page.getByTestId('toolbar')).toBeVisible()
+    await expectInsideViewport(page, page.getByTestId('toolbar'))
+    await expect(page.getByTestId('map-canvas').locator('canvas')).toBeVisible()
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true)
+
+    if (viewport.width <= 900) {
+      await page.getByTestId('toolbar-more-button').click()
+      await expect(page.getByTestId('generate-random-map-button')).toBeVisible()
+      await page.getByTestId('reset-menu-button').scrollIntoViewIfNeeded()
+      await expect(page.getByTestId('reset-menu-button')).toBeVisible()
+      await expectInsideViewport(page, page.getByTestId('toolbar-more-button'))
+    } else {
+      await expect(page.getByTestId('generate-random-map-button')).toBeVisible()
+    }
+
+    const canvas = page.getByTestId('map-canvas').locator('canvas')
+    await canvas.evaluate(async (element) => {
+      const bounds = element.getBoundingClientRect()
+      const pointer = (type: string, buttons: number) =>
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 401,
+          pointerType: 'touch',
+          isPrimary: true,
+          button: 0,
+          buttons,
+          clientX: bounds.left + bounds.width * 0.35,
+          clientY: bounds.top + bounds.height * 0.6,
+        })
+      element.dispatchEvent(pointer('pointerdown', 1))
+      await new Promise((resolve) => window.setTimeout(resolve, 560))
+      window.dispatchEvent(pointer('pointerup', 0))
+    })
+    const menu = page.getByTestId('spell-radial-menu')
+    await expect(menu).toBeVisible()
+    await expectInsideViewport(page, menu)
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true)
+    await menu.getByRole('button', { name: 'Schließen' }).click()
+  }
+})

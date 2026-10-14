@@ -71,7 +71,7 @@ export const tokenTemplates: readonly TokenTemplate[] = [
     category: 'player',
     color: '#a66cff',
     symbol: 'M',
-    defaultVisionRange: 7,
+    defaultVisionRange: 8,
   },
   {
     kind: 'goblin',
@@ -79,7 +79,7 @@ export const tokenTemplates: readonly TokenTemplate[] = [
     category: 'monster',
     color: '#5fa857',
     symbol: 'G',
-    defaultVisionRange: 6,
+    defaultVisionRange: 0,
   },
   {
     kind: 'skeleton',
@@ -87,7 +87,7 @@ export const tokenTemplates: readonly TokenTemplate[] = [
     category: 'undead',
     color: '#d2d7df',
     symbol: 'S',
-    defaultVisionRange: 6,
+    defaultVisionRange: 0,
   },
 ]
 

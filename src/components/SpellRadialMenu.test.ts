@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { describe, expect, it } from 'vitest'
 import SpellRadialMenu from './SpellRadialMenu.vue'
 
@@ -83,5 +84,45 @@ describe('SpellRadialMenu', () => {
     expect(wrapper.emitted('createQuickToken')).toEqual([
       [{ category: 'monster', size: 3, color: '#ff6600' }],
     ])
+  })
+
+  it('misst das Menü und weicht am rechten unteren Rand nach links oben aus', async () => {
+    const wrapper = mount(SpellRadialMenu, {
+      props: {
+        open: true,
+        contextLabel: 'Freie Platzierung',
+        tokenCreationEnabled: true,
+        x: 20,
+        y: 30,
+      },
+    })
+    const backdrop = wrapper.get('[data-testid="spell-menu-backdrop"]').element
+    const menu = wrapper.get('[data-testid="spell-radial-menu"]').element
+    backdrop.getBoundingClientRect = () => ({ width: 320, height: 640 }) as DOMRect
+    menu.getBoundingClientRect = () => ({ width: 240, height: 300 }) as DOMRect
+
+    await wrapper.setProps({ x: 300, y: 620 })
+    await nextTick()
+    await nextTick()
+
+    expect(menu.getAttribute('style')).toContain('left: 48px')
+    expect(menu.getAttribute('style')).toContain('top: 308px')
+  })
+
+  it('schließt nur beim Antippen des Backdrops, nicht beim Bedienen des Menüs', async () => {
+    const wrapper = mount(SpellRadialMenu, {
+      props: {
+        open: true,
+        contextLabel: 'Freie Platzierung',
+        tokenCreationEnabled: true,
+        x: 20,
+        y: 30,
+      },
+    })
+
+    await wrapper.get('[data-testid="spell-radial-menu"]').trigger('pointerdown')
+    expect(wrapper.emitted('close')).toBeUndefined()
+    await wrapper.get('[data-testid="spell-menu-backdrop"]').trigger('pointerdown')
+    expect(wrapper.emitted('close')).toEqual([[]])
   })
 })

@@ -174,7 +174,9 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
     vi.advanceTimersByTime(520)
 
     expect(callbacks.onTokenLongPress).toHaveBeenCalledWith(token.id, { x: 240, y: 240 })
-    expect((Reflect.get(engine, 'tokenRenderer') as TokenRenderer).isPointerActiveFor(18)).toBe(false)
+    expect((Reflect.get(engine, 'tokenRenderer') as TokenRenderer).isPointerActiveFor(18)).toBe(
+      false,
+    )
     engine.destroy()
     vi.useRealTimers()
   })
@@ -703,5 +705,134 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
       expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }),
     )
     engine.destroy()
+  })
+  it('laesst einen Resize-Griff neben einem laufenden Token-Drag pointer-lokal arbeiten', () => {
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    const sphere = effect('sphere')
+    engine.setMap(map, {})
+    engine.setTokens([token], null)
+    engine.setSpellEffects([sphere], sphere.id)
+    Reflect.set(engine, 'editingSpellEffectId', sphere.id)
+    const layers = Reflect.get(engine, 'layers') as { readonly tokens: Container }
+
+    layers.tokens.children[0]?.emit('pointerdown', {
+      pointerId: 90,
+      global: { x: 240, y: 240 },
+      stopPropagation: () => undefined,
+    } as FederatedPointerEvent)
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(90, 240, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(91, 457, 240, 'touch'))
+
+    expect(Reflect.get(engine, 'spellEffectInteraction')).toMatchObject({
+      pointerId: 91,
+      mode: 'resize',
+    })
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(90, 288, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(91, 480, 240, 'touch'))
+    Reflect.get(engine, 'flushSpellEffectUpdate').call(engine)
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(91, 480, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(90, 288, 240, 'touch'))
+
+    expect(callbacks.onSpellEffectUpdate).toHaveBeenCalledWith(
+      sphere.id,
+      expect.objectContaining({ size: expect.any(Number) }),
+    )
+    expect(callbacks.onTokenMove).toHaveBeenCalledWith(token.id, expect.anything())
+    engine.destroy()
+  })
+
+  it('gibt einem expliziten Griff vor einem ueberlappenden Token Vorrang', () => {
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    const sphere = effect('sphere')
+    const tokenAtHandle = { ...token, id: 'handle-token', position: { x: 8.5, y: 4 } }
+    engine.setMap(map, {})
+    engine.setTokens([tokenAtHandle], null)
+    engine.setSpellEffects([sphere], sphere.id)
+    Reflect.set(engine, 'editingSpellEffectId', sphere.id)
+    const layers = Reflect.get(engine, 'layers') as { readonly tokens: Container }
+    const renderer = Reflect.get(engine, 'tokenRenderer') as TokenRenderer
+
+    layers.tokens.children[0]?.emit('pointerdown', {
+      pointerId: 92,
+      global: { x: 457, y: 240 },
+      stopPropagation: () => undefined,
+    } as FederatedPointerEvent)
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(92, 457, 240, 'touch'))
+
+    expect(renderer.isPointerActiveFor(92)).toBe(false)
+    expect(Reflect.get(engine, 'spellEffectInteraction')).toMatchObject({
+      pointerId: 92,
+      mode: 'resize',
+    })
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(92, 480, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(92, 480, 240, 'touch'))
+    expect(callbacks.onTokenMove).not.toHaveBeenCalled()
+    expect(callbacks.onSpellEffectUpdate).toHaveBeenCalledOnce()
+    engine.destroy()
+  })
+
+  it('beendet pointercancel nur den Spell-Griff und laesst den Token-Drag weiterlaufen', () => {
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    const sphere = effect('sphere')
+    engine.setMap(map, {})
+    engine.setTokens([token], null)
+    engine.setSpellEffects([sphere], sphere.id)
+    Reflect.set(engine, 'editingSpellEffectId', sphere.id)
+    const layers = Reflect.get(engine, 'layers') as { readonly tokens: Container }
+    const renderer = Reflect.get(engine, 'tokenRenderer') as TokenRenderer
+
+    layers.tokens.children[0]?.emit('pointerdown', {
+      pointerId: 93,
+      global: { x: 240, y: 240 },
+      stopPropagation: () => undefined,
+    } as FederatedPointerEvent)
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(93, 240, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(94, 457, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(94, 480, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerCancel', pointerEvent(94, 480, 240, 'touch'))
+
+    expect(renderer.isPointerActiveFor(93)).toBe(true)
+    expect(Reflect.get(engine, 'spellEffectInteraction')).toBeNull()
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(93, 288, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(93, 288, 240, 'touch'))
+    expect(callbacks.onTokenMove).toHaveBeenCalledWith(token.id, expect.anything())
+    expect(callbacks.onSpellEffectUpdate).not.toHaveBeenCalled()
+    engine.destroy()
+  })
+
+  it('oeffnet den Long-Press eines zweiten Tokens, ohne den ersten Drag zu beenden', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    const secondToken = { ...token, id: 'long-press-token', position: { x: 6, y: 4 } }
+    engine.setMap(map, {})
+    engine.setTokens([token, secondToken], null)
+    const layers = Reflect.get(engine, 'layers') as { readonly tokens: Container }
+    const renderer = Reflect.get(engine, 'tokenRenderer') as TokenRenderer
+
+    layers.tokens.children[0]?.emit('pointerdown', {
+      pointerId: 95,
+      global: { x: 240, y: 240 },
+      stopPropagation: () => undefined,
+    } as FederatedPointerEvent)
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(95, 240, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(95, 288, 240, 'touch'))
+    Reflect.get(engine, 'flushTokenDrag').call(engine, 95, { x: 288, y: 240 })
+    layers.tokens.children[1]?.emit('pointerdown', {
+      pointerId: 96,
+      global: { x: 336, y: 240 },
+      stopPropagation: () => undefined,
+    } as FederatedPointerEvent)
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(96, 336, 240, 'touch'))
+    vi.advanceTimersByTime(520)
+
+    expect(callbacks.onTokenLongPress).toHaveBeenCalledWith(secondToken.id, { x: 336, y: 240 })
+    expect(renderer.isPointerActiveFor(95)).toBe(true)
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(95, 288, 240, 'touch'))
+    engine.destroy()
+    vi.useRealTimers()
   })
 })

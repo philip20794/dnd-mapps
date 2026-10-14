@@ -193,6 +193,34 @@ const endpointAngles = (origin: GridPoint, segments: readonly Segment[]): number
     }),
   )
 
+const ANGLE_DEDUPLICATION_EPSILON = EPSILON / 100
+
+const sortedUniqueAngles = (
+  angles: readonly number[],
+  rotation: number,
+  visionAngle: number | null,
+): number[] => {
+  const sorted = angles
+    .filter((angle) => isInsideVisionAngle(angle, rotation, visionAngle))
+    .sort((left, right) =>
+      visionAngle === null
+        ? normalizeAngle(left) - normalizeAngle(right)
+        : relativeAngle(left, rotation) - relativeAngle(right, rotation),
+    )
+  const unique: number[] = []
+  for (const angle of sorted) {
+    const previous = unique.at(-1)
+    const difference =
+      previous === undefined
+        ? Number.POSITIVE_INFINITY
+        : visionAngle === null
+          ? Math.abs(normalizeAngle(angle) - normalizeAngle(previous))
+          : Math.abs(relativeAngle(angle, rotation) - relativeAngle(previous, rotation))
+    if (difference > ANGLE_DEDUPLICATION_EPSILON) unique.push(angle)
+  }
+  return unique
+}
+
 const sampleAngles = (rotation: number, visionAngle: number | null): number[] => {
   if (visionAngle === null) {
     return Array.from(
@@ -420,20 +448,14 @@ const computeVisibility = (
   const rotation = (input.rotationDegrees * Math.PI) / 180
   const visionAngle =
     input.visionAngleDegrees === null ? null : (input.visionAngleDegrees * Math.PI) / 180
-  const angles = [
-    ...endpointAngles(input.origin, input.segments),
-    ...sampleAngles(rotation, visionAngle),
-  ]
-    .filter((angle) => isInsideVisionAngle(angle, rotation, visionAngle))
-    .sort((left, right) => {
-      if (visionAngle === null) {
-        return normalizeAngle(left) - normalizeAngle(right)
-      }
-      return relativeAngle(left, rotation) - relativeAngle(right, rotation)
-    })
+  const intersectionSegments = input.intersectionSegments ?? input.segments
+  const angles = sortedUniqueAngles(
+    [...endpointAngles(input.origin, intersectionSegments), ...sampleAngles(rotation, visionAngle)],
+    rotation,
+    visionAngle,
+  )
 
   const samples: VisibilityRaySample[] = []
-  const intersectionSegments = input.intersectionSegments ?? input.segments
   for (const angle of angles) {
     let closest: RayHit | null = null
     let closestBlocker: VisibilityBlocker | null = null

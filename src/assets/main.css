@@ -44,7 +44,7 @@ body,
 }
 
 body {
-  min-width: 900px;
+  min-width: 0;
 }
 
 button,
@@ -103,6 +103,7 @@ select {
   grid-template-rows: var(--toolbar-height) minmax(0, 1fr);
   width: 100%;
   height: 100%;
+  height: 100dvh;
   background: var(--color-bg);
 }
 
@@ -154,6 +155,18 @@ select {
 
 .toolbar-spacer {
   flex: 1;
+}
+
+.toolbar-more {
+  display: contents;
+}
+
+.toolbar-more > summary {
+  display: none;
+}
+
+.toolbar-more-content {
+  display: contents;
 }
 
 .icon-button {
@@ -792,19 +805,27 @@ select {
 .token-context-backdrop {
   position: absolute;
   inset: 0;
-  z-index: 12;
+  z-index: 21;
   background: rgba(3, 6, 10, 0.12);
-  touch-action: none;
+  /* The overlay still receives every pointer before the canvas, but does not veto
+     the menu's native vertical touch scrolling through an ancestor touch-action. */
+  touch-action: auto;
+  overscroll-behavior: contain;
 }
 
 .spell-radial-menu {
   position: absolute;
   display: grid;
   gap: var(--space-3);
-  width: 340px;
+  box-sizing: border-box;
+  width: min(340px, calc(100% - 24px));
+  max-width: calc(100% - 24px);
   max-height: min(470px, calc(100% - 24px));
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   border: 1px solid #59697b;
   border-radius: 14px;
   padding: var(--space-3);
@@ -817,10 +838,15 @@ select {
   position: absolute;
   display: grid;
   gap: var(--space-3);
-  width: 300px;
+  box-sizing: border-box;
+  width: min(300px, calc(100% - 24px));
+  max-width: calc(100% - 24px);
   max-height: min(420px, calc(100% - 24px));
-  overflow: auto;
-  touch-action: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   border: 1px solid #59697b;
   border-radius: 14px;
   padding: var(--space-3);
@@ -859,7 +885,6 @@ select {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-2);
-  overflow: auto;
 }
 
 .spell-menu-tabs,
@@ -1079,6 +1104,11 @@ select {
   padding: 4px 9px;
 }
 
+.spell-edit-delete {
+  border-color: #fb7185;
+  color: #fecdd3;
+}
+
 .spell-trash-target {
   position: absolute;
   right: 18px;
@@ -1153,6 +1183,22 @@ select {
   .spell-menu-option,
   .spell-effect-list-item {
     min-height: 52px;
+  }
+
+  .spell-menu-tabs button,
+  .token-size-options button {
+    min-height: 44px;
+  }
+
+  .token-color-swatch {
+    width: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .token-creation-color input[type='color'],
+  .token-context-color-picker input[type='color'] {
+    min-height: 44px;
   }
 
   .spell-placement-banner,
@@ -1287,5 +1333,122 @@ select {
   .toolbar {
     gap: var(--space-2);
     padding: 0 var(--space-3);
+  }
+}
+
+@media (max-width: 900px) {
+  :root {
+    --toolbar-height: 60px;
+  }
+
+  .toolbar {
+    position: relative;
+    z-index: 15;
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .map-group {
+    flex: 1 1 auto;
+    width: auto;
+  }
+
+  .map-group label {
+    display: none;
+  }
+
+  .toolbar-more {
+    position: relative;
+    display: block;
+    flex: 0 0 auto;
+  }
+
+  .toolbar-more > summary {
+    display: grid;
+    place-items: center;
+    min-height: 44px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 0 10px;
+    background: var(--color-panel-strong);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .toolbar-more > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .toolbar-more-content {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 16;
+    display: grid;
+    gap: var(--space-2);
+    width: min(360px, calc(100vw - 16px));
+    max-height: calc(100dvh - var(--toolbar-height) - 16px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    background: var(--color-panel);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+  }
+
+  .toolbar-more:not([open]) .toolbar-more-content {
+    display: none;
+  }
+
+  .toolbar-more-content .toolbar-group {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .toolbar-more-content .toolbar-spacer {
+    display: none;
+  }
+
+  .toolbar-more-content > button,
+  .toolbar-more-content .mode-toggle,
+  .toolbar-more-content .level-menu,
+  .toolbar-more-content .reset-menu,
+  .toolbar-more-content .zoom-chip {
+    width: 100%;
+    max-width: none;
+  }
+
+  .toolbar-more-content .level-menu-content,
+  .toolbar-more-content .reset-menu-content {
+    position: static;
+    width: 100%;
+    margin-top: var(--space-2);
+    box-shadow: none;
+  }
+
+  .main-layout,
+  .main-layout.sidebar-collapsed {
+    position: relative;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sidebar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 10;
+    width: min(360px, calc(100vw - 32px));
+    box-shadow: 14px 0 32px rgba(0, 0, 0, 0.45);
+  }
+
+  .spell-radial-menu,
+  .token-context-menu {
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    left: 12px !important;
+    top: auto !important;
+    width: auto;
+    max-height: min(72dvh, calc(100% - 24px));
+    border-radius: 16px;
   }
 }

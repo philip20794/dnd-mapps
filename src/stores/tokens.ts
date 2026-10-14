@@ -30,6 +30,9 @@ const nextUniqueToken = (
   return { id: createTokenId(number), nextNumber: number + 1 }
 }
 
+const hasSightlessOpponentDefault = (category: PlacedToken['category']): boolean =>
+  category === 'monster' || category === 'undead'
+
 export const useTokenStore = defineStore('tokens', {
   state: (): TokenState => ({
     tokens: [],
@@ -57,6 +60,7 @@ export const useTokenStore = defineStore('tokens', {
       }
 
       const identity = nextUniqueToken(this.tokens, this.nextTokenNumber)
+      const hasSightlessDefault = hasSightlessOpponentDefault(template.category)
       const token: PlacedToken = {
         id: identity.id,
         mapId,
@@ -65,9 +69,9 @@ export const useTokenStore = defineStore('tokens', {
         position,
         size: 1,
         rotation: 0,
-        visionRange: template.defaultVisionRange,
+        visionRange: hasSightlessDefault ? 0 : template.defaultVisionRange,
         visionAngle: null,
-        visionEnabled: true,
+        visionEnabled: !hasSightlessDefault && template.defaultVisionRange > 0,
         category: template.category,
         color: template.color,
         symbol: template.symbol,

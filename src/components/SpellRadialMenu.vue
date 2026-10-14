@@ -1,11 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { spellAreaPresets } from '@/types/spells'
-import {
-  tokenSizeOptions,
-  type QuickTokenCategory,
-  type TokenSizeId,
-} from '@/types/tokens'
+import { tokenSizeOptions, type QuickTokenCategory, type TokenSizeId } from '@/types/tokens'
+import { positionAnchoredMenu } from './menuPosition'
 
 const emit = defineEmits<{
   choose: [presetId: string]
@@ -26,6 +23,13 @@ const selectedTokenCategory = ref<QuickTokenCategory | null>(null)
 const selectedMonsterSize = ref<TokenSizeId>('medium')
 const playerColor = ref('#3f8cff')
 const monsterColor = ref('#dc4b4b')
+const backdrop = ref<HTMLElement | null>(null)
+const menu = ref<HTMLElement | null>(null)
+const position = ref<{ left: number; top: number; maxHeight: number | null }>({
+  left: props.x,
+  top: props.y,
+  maxHeight: null,
+})
 const selectedSize = computed(
   () => tokenSizeOptions.find((option) => option.id === selectedMonsterSize.value)?.size ?? 1,
 )
@@ -41,6 +45,45 @@ watch(
     monsterColor.value = '#dc4b4b'
   },
 )
+
+const updatePosition = async (): Promise<void> => {
+  if (!props.open) return
+  await nextTick()
+  if (!backdrop.value || !menu.value) return
+  const bounds = backdrop.value.getBoundingClientRect()
+  const rect = menu.value.getBoundingClientRect()
+  position.value = positionAnchoredMenu(
+    { x: props.x, y: props.y },
+    { width: bounds.width, height: bounds.height },
+    { width: rect.width, height: rect.height },
+  )
+  // A newly constrained max-height changes the measured box. Place it once more with
+  // that real height so the upper edge is never clipped.
+  await nextTick()
+  const constrainedRect = menu.value.getBoundingClientRect()
+  position.value = positionAnchoredMenu(
+    { x: props.x, y: props.y },
+    { width: bounds.width, height: bounds.height },
+    { width: constrainedRect.width, height: constrainedRect.height },
+  )
+}
+
+watch(
+  () => [props.open, props.x, props.y],
+  () => void updatePosition(),
+)
+const refreshPosition = (): void => void updatePosition()
+onMounted(() => {
+  window.addEventListener('resize', refreshPosition)
+  window.visualViewport?.addEventListener('resize', refreshPosition)
+  window.visualViewport?.addEventListener('scroll', refreshPosition)
+  void updatePosition()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', refreshPosition)
+  window.visualViewport?.removeEventListener('resize', refreshPosition)
+  window.visualViewport?.removeEventListener('scroll', refreshPosition)
+})
 
 const selectTokenCategory = (category: QuickTokenCategory): void => {
   selectedTokenCategory.value = category
@@ -60,14 +103,20 @@ const createQuickToken = (): void => {
 <template>
   <div
     v-if="open"
+    ref="backdrop"
     class="spell-menu-backdrop"
     data-testid="spell-menu-backdrop"
     @pointerdown.self="emit('close')"
   >
     <section
       class="spell-radial-menu"
-      :style="{ left: `${x}px`, top: `${y}px` }"
+      :style="{
+        left: `${position.left}px`,
+        top: `${position.top}px`,
+        maxHeight: position.maxHeight === null ? undefined : `${position.maxHeight}px`,
+      }"
       data-testid="spell-radial-menu"
+      ref="menu"
       @pointerdown.stop
     >
       <header class="spell-menu-header">
@@ -182,7 +231,12 @@ const createQuickToken = (): void => {
               {{ option.label }}
             </button>
           </div>
-          <button type="button" class="primary" data-testid="create-quick-token" @click="createQuickToken">
+          <button
+            type="button"
+            class="primary"
+            data-testid="create-quick-token"
+            @click="createQuickToken"
+          >
             {{ selectedTokenCategory === 'player' ? 'Spieler erstellen' : 'Gegner erstellen' }}
           </button>
         </template>
@@ -190,7 +244,9 @@ const createQuickToken = (): void => {
       <p v-if="activeCategory === 'spells'" class="spell-menu-hint">
         Form auswählen und auf der Karte absetzen. Danach direkt skalieren, drehen oder verschieben.
       </p>
-      <p v-else class="spell-menu-hint">Der Token wird an der gedrückten Kartenposition erstellt.</p>
+      <p v-else class="spell-menu-hint">
+        Der Token wird an der gedrückten Kartenposition erstellt.
+      </p>
     </section>
   </div>
 </template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { PlacedToken } from '@/types/tokens'
+import { positionAnchoredMenu } from './menuPosition'
 
 const tokenColors = ['#3f8cff', '#dc4b4b', '#5fa857', '#f2b84b', '#a66cff', '#d2d7df']
 
@@ -21,6 +22,13 @@ const props = defineProps<{
 }>()
 
 const confirmDelete = ref(false)
+const backdrop = ref<HTMLElement | null>(null)
+const menu = ref<HTMLElement | null>(null)
+const position = ref<{ left: number; top: number; maxHeight: number | null }>({
+  left: props.x,
+  top: props.y,
+  maxHeight: null,
+})
 
 watch(
   () => props.open,
@@ -28,6 +36,43 @@ watch(
     if (open) confirmDelete.value = false
   },
 )
+
+const updatePosition = async (): Promise<void> => {
+  if (!props.open || !props.token) return
+  await nextTick()
+  if (!backdrop.value || !menu.value) return
+  const bounds = backdrop.value.getBoundingClientRect()
+  const rect = menu.value.getBoundingClientRect()
+  position.value = positionAnchoredMenu(
+    { x: props.x, y: props.y },
+    { width: bounds.width, height: bounds.height },
+    { width: rect.width, height: rect.height },
+  )
+  await nextTick()
+  const constrainedRect = menu.value.getBoundingClientRect()
+  position.value = positionAnchoredMenu(
+    { x: props.x, y: props.y },
+    { width: bounds.width, height: bounds.height },
+    { width: constrainedRect.width, height: constrainedRect.height },
+  )
+}
+
+watch(
+  () => [props.open, props.token?.id, props.x, props.y],
+  () => void updatePosition(),
+)
+const refreshPosition = (): void => void updatePosition()
+onMounted(() => {
+  window.addEventListener('resize', refreshPosition)
+  window.visualViewport?.addEventListener('resize', refreshPosition)
+  window.visualViewport?.addEventListener('scroll', refreshPosition)
+  void updatePosition()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', refreshPosition)
+  window.visualViewport?.removeEventListener('resize', refreshPosition)
+  window.visualViewport?.removeEventListener('scroll', refreshPosition)
+})
 
 const updateVisionRange = (value: string): void => {
   if (!props.token) return
@@ -51,14 +96,20 @@ const deleteToken = (): void => {
 <template>
   <div
     v-if="open && token"
+    ref="backdrop"
     class="token-context-backdrop"
     data-testid="token-context-backdrop"
     @pointerdown.self="emit('close')"
   >
     <section
       class="token-context-menu"
-      :style="{ left: `${x}px`, top: `${y}px` }"
+      :style="{
+        left: `${position.left}px`,
+        top: `${position.top}px`,
+        maxHeight: position.maxHeight === null ? undefined : `${position.maxHeight}px`,
+      }"
       data-testid="token-context-menu"
+      ref="menu"
       @pointerdown.stop
     >
       <header class="spell-menu-header">
@@ -66,7 +117,12 @@ const deleteToken = (): void => {
           <strong>Token: {{ token.name }}</strong>
           <small>Aktionen und Eigenschaften</small>
         </div>
-        <button type="button" class="spell-menu-close" aria-label="Schließen" @click="emit('close')">
+        <button
+          type="button"
+          class="spell-menu-close"
+          aria-label="Schließen"
+          @click="emit('close')"
+        >
           ×
         </button>
       </header>
@@ -116,13 +172,19 @@ const deleteToken = (): void => {
             type="checkbox"
             :checked="token.visionEnabled"
             :disabled="token.visionRange <= 0"
-            @change="emit('updateVisionEnabled', token.id, ($event.target as HTMLInputElement).checked)"
+            @change="
+              emit('updateVisionEnabled', token.id, ($event.target as HTMLInputElement).checked)
+            "
           />
           Sichtberechnung aktiv
         </label>
       </section>
 
-      <button type="button" class="primary token-context-action" @click="emit('createSpell', token.id)">
+      <button
+        type="button"
+        class="primary token-context-action"
+        @click="emit('createSpell', token.id)"
+      >
         Zauberform erstellen
       </button>
       <button

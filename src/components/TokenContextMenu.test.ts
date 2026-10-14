@@ -18,8 +18,7 @@ const token = {
 }
 
 describe('TokenContextMenu', () => {
-  const mountMenu = () =>
-    mount(TokenContextMenu, { props: { open: true, token, x: 40, y: 60 } })
+  const mountMenu = () => mount(TokenContextMenu, { props: { open: true, token, x: 40, y: 60 } })
 
   it('gibt Farbe und Sichtwerte für den ausgewählten Token weiter', async () => {
     const wrapper = mountMenu()
@@ -43,6 +42,15 @@ describe('TokenContextMenu', () => {
 
     await wrapper.get('[data-testid="token-context-delete"]').trigger('click')
     expect(wrapper.emitted('deleteToken')).toEqual([['token-1']])
+    expect(wrapper.emitted('close')).toEqual([[]])
+  })
+
+  it('schließt nur beim Antippen außerhalb des scrollbaren Menüs', async () => {
+    const wrapper = mountMenu()
+
+    await wrapper.get('[data-testid="token-context-menu"]').trigger('pointerdown')
+    expect(wrapper.emitted('close')).toBeUndefined()
+    await wrapper.get('[data-testid="token-context-backdrop"]').trigger('pointerdown')
     expect(wrapper.emitted('close')).toEqual([[]])
   })
 })

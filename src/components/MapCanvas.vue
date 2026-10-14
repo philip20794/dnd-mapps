@@ -122,23 +122,21 @@ onMounted(async () => {
       if (!token || !host.value) {
         return
       }
-      const bounds = host.value.getBoundingClientRect()
       spellMenu.value.open = false
       tokenContextMenu.value = {
         open: true,
         tokenId,
-        x: Math.max(12, Math.min(screenPoint.x + 12, bounds.width - 320)),
-        y: Math.max(12, Math.min(screenPoint.y + 12, bounds.height - 420)),
+        x: screenPoint.x,
+        y: screenPoint.y,
       }
     },
     onMapLongPress: (position, screenPoint) => {
       if (!host.value) return
-      const bounds = host.value.getBoundingClientRect()
       spellMenu.value = {
         open: true,
         context: { kind: 'free', origin: position, label: 'Freie Platzierung' },
-        x: Math.max(12, Math.min(screenPoint.x + 12, bounds.width - 360)),
-        y: Math.max(12, Math.min(screenPoint.y + 12, bounds.height - 450)),
+        x: screenPoint.x,
+        y: screenPoint.y,
       }
     },
     onSpellPlace: (placement, target) => emit('placeSpell', placement, target),
@@ -308,6 +306,14 @@ const finishSpellEffectEditing = (): void => {
   engine?.finishSpellEffectEditing()
 }
 
+const deleteEditingSpellEffect = (): void => {
+  const effectId = editingSpellEffectId.value
+  if (!effectId) return
+
+  engine?.finishSpellEffectEditing()
+  emit('deleteSpellEffect', effectId)
+}
+
 const chooseSpell = (presetId: string): void => {
   const context = spellMenu.value.context
   spellMenu.value.open = false
@@ -407,6 +413,15 @@ const deleteContextToken = (tokenId: string): void => {
       <span>Flächenform bearbeiten</span>
       <button type="button" data-testid="finish-spell-edit" @click="finishSpellEffectEditing">
         Fertig
+      </button>
+      <button
+        type="button"
+        class="spell-edit-delete"
+        data-testid="delete-spell-edit"
+        aria-label="Flächenform löschen"
+        @click="deleteEditingSpellEffect"
+      >
+        Löschen
       </button>
     </div>
     <div

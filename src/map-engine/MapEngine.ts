@@ -883,11 +883,6 @@ export class MapEngine {
         if (this.spellEffectInteraction?.mode !== 'pending-long-press') {
           return
         }
-        if (this.tokenRenderer.isPointerActive) {
-          this.spellEffectInteraction = { ...this.spellEffectInteraction, mode: 'blocked' }
-          this.spellEffectLongPressTimer = null
-          return
-        }
         this.spellEffectInteraction = { ...this.spellEffectInteraction, mode: 'move-ready' }
         this.spellEffectLongPressTimer = null
         this.setSpellEffectEditing(effect.id)
@@ -1173,8 +1168,9 @@ export class MapEngine {
         )
         if (handle && selected) {
           event.preventDefault()
-          if (this.tokenRenderer.isPointerActive) {
-            return
+          if (this.tokenRenderer.isPointerActiveFor(event.pointerId)) {
+            this.tokenDragQueue.cancel(event.pointerId)
+            this.tokenRenderer.cancelPointerInteraction(event.pointerId)
           }
           this.cancelTouchCameraGesture()
           this.beginSpellEffectInteraction(event, this.resolvedSpellEffect(selected), handle, point)
