@@ -16,7 +16,7 @@ const jsonResponse = (
       'Cache-Control': 'no-store',
       'Content-Type': 'application/json; charset=utf-8',
       ...corsHeaders(request, config),
-      ...(response.headers ?? {}),
+      ...response.headers,
     },
   })
 

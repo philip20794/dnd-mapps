@@ -1,5 +1,6 @@
 import type { GridPoint } from '@/types/geometry'
 import type { PlacedSpellEffect } from '@/types/spells'
+import type { GridBounds } from '../grid/coordinates'
 
 export const worldPointToEffectLocal = (
   point: GridPoint,
@@ -48,6 +49,51 @@ export const effectLocalToWorld = (
   return {
     x: effect.position.x + point.x * Math.cos(radians) - point.y * Math.sin(radians),
     y: effect.position.y + point.x * Math.sin(radians) + point.y * Math.cos(radians),
+  }
+}
+
+export const spellEffectWorldBounds = (
+  effect: Pick<PlacedSpellEffect, 'shape' | 'position' | 'rotation' | 'size' | 'width'>,
+): GridBounds => {
+  const round = ['sphere', 'cylinder', 'emanation'].includes(effect.shape)
+  if (round) {
+    return {
+      minX: effect.position.x - effect.size,
+      minY: effect.position.y - effect.size,
+      maxX: effect.position.x + effect.size,
+      maxY: effect.position.y + effect.size,
+    }
+  }
+
+  const localBounds =
+    effect.shape === 'cube'
+      ? {
+          minX: -effect.size / 2,
+          minY: -effect.size / 2,
+          maxX: effect.size / 2,
+          maxY: effect.size / 2,
+        }
+      : effect.shape === 'wall'
+        ? {
+            minX: -effect.size / 2,
+            minY: -effect.width / 2,
+            maxX: effect.size / 2,
+            maxY: effect.width / 2,
+          }
+        : effect.shape === 'cone'
+          ? { minX: 0, minY: -effect.size / 2, maxX: effect.size, maxY: effect.size / 2 }
+          : { minX: 0, minY: -effect.width / 2, maxX: effect.size, maxY: effect.width / 2 }
+  const corners = [
+    { x: localBounds.minX, y: localBounds.minY },
+    { x: localBounds.maxX, y: localBounds.minY },
+    { x: localBounds.maxX, y: localBounds.maxY },
+    { x: localBounds.minX, y: localBounds.maxY },
+  ].map((point) => effectLocalToWorld(point, effect))
+  return {
+    minX: Math.min(...corners.map((point) => point.x)),
+    minY: Math.min(...corners.map((point) => point.y)),
+    maxX: Math.max(...corners.map((point) => point.x)),
+    maxY: Math.max(...corners.map((point) => point.y)),
   }
 }
 

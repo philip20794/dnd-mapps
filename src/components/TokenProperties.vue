@@ -12,6 +12,7 @@ const emit = defineEmits<{
   updateVisionRange: [value: number]
   updateVisionAngle: [value: number | null]
   updateVisionEnabled: [value: boolean]
+  updateColor: [value: string]
   deleteToken: []
 }>()
 
@@ -54,6 +55,15 @@ const parseNullableNumber = (value: string): number | null => {
           step="5"
           :value="token.rotation"
           @input="emit('updateRotation', Number(($event.target as HTMLInputElement).value))"
+        />
+      </label>
+      <label>
+        Farbe
+        <input
+          type="color"
+          data-testid="token-color-input"
+          :value="token.color"
+          @input="emit('updateColor', ($event.target as HTMLInputElement).value)"
         />
       </label>
       <label>

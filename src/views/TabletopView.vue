@@ -17,11 +17,11 @@ import { useSessionStore } from '@/stores/session'
 import { useSettingsStore } from '@/stores/settings'
 import { useSpellEffectStore } from '@/stores/spellEffects'
 import { useTokenStore } from '@/stores/tokens'
-import type { Polygon } from '@/types/geometry'
+import type { GridPoint, Polygon } from '@/types/geometry'
 import type { ExplorationMask } from '@/map-engine/fog/fogState'
 import { defaultCameraState, type RuntimeSettings } from '@/types/settings'
 import { findSpellAreaPreset, type SpellEffectPatch, type SpellPlacement } from '@/types/spells'
-import { tokenTemplates, type TokenPatch } from '@/types/tokens'
+import { tokenTemplates, type QuickTokenCreation, type TokenPatch } from '@/types/tokens'
 
 const appStore = useAppStore()
 const mapStore = useMapStore()
@@ -232,6 +232,13 @@ const addToken = (kind: string, position: { readonly x: number; readonly y: numb
   }
 }
 
+const addQuickToken = (creation: QuickTokenCreation, position: GridPoint): void => {
+  if (!currentMap.value || !currentLevelId.value) return
+  tokenStore.addQuickToken(creation, currentMap.value.id, position, currentLevelId.value)
+  appStore.setStatus(creation.category === 'player' ? 'Spieler platziert' : 'Gegner platziert')
+  scheduleAutoSave()
+}
+
 const beginTokenPlacement = (kind: string): void => {
   if (!currentMap.value || !currentLevelId.value) {
     return
@@ -257,23 +264,39 @@ const beginSpellPlacement = (casterTokenId: string, presetId: string): void => {
   tokenStore.setSelectedToken(casterTokenId)
   spellEffectStore.setSelectedEffect(null)
   tokenPlacementKind.value = null
-  spellPlacement.value = { casterTokenId, presetId }
+  spellPlacement.value = { kind: 'caster', casterTokenId, presetId }
   appStore.setStatus(`${preset.name}: Position auswählen`)
 }
 
-const placeSpell = (
-  casterTokenId: string,
-  presetId: string,
-  target: { readonly x: number; readonly y: number },
-): void => {
-  const caster = tokenStore.tokens.find((token) => token.id === casterTokenId)
+const beginFreeSpellPlacement = (presetId: string, origin: GridPoint): void => {
   const preset = findSpellAreaPreset(presetId)
-  if (!caster || !preset || !currentLevelId.value) {
+  if (!preset || !currentMap.value || !currentLevelId.value) {
+    appStore.setError('Die freie Flächenform konnte nicht vorbereitet werden.')
+    return
+  }
+  spellEffectStore.setSelectedEffect(null)
+  tokenPlacementKind.value = null
+  spellPlacement.value = { kind: 'free', presetId, origin }
+  appStore.setStatus(`${preset.name}: Position bestätigen oder anpassen`)
+}
+
+const placeSpell = (placement: SpellPlacement, target: GridPoint): void => {
+  const preset = findSpellAreaPreset(placement.presetId)
+  if (!preset || !currentMap.value || !currentLevelId.value) {
     spellPlacement.value = null
     tokenPlacementKind.value = null
     return
   }
-  spellEffectStore.addFromPreset(preset, caster, target, currentLevelId.value)
+  if (placement.kind === 'caster') {
+    const caster = tokenStore.tokens.find((token) => token.id === placement.casterTokenId)
+    if (!caster) {
+      spellPlacement.value = null
+      return
+    }
+    spellEffectStore.addFromPreset(preset, caster, target, currentLevelId.value)
+  } else {
+    spellEffectStore.addFreeFromPreset(preset, currentMap.value.id, target, currentLevelId.value)
+  }
   spellPlacement.value = null
   appStore.setStatus(`${preset.name} auf der Karte eingezeichnet`)
   scheduleAutoSave()
@@ -412,21 +435,32 @@ const resetSession = async (): Promise<void> => {
   await persistSession('Sitzung zurückgesetzt')
 }
 
-const updateSelectedToken = (patch: TokenPatch): void => {
-  if (tokenStore.selectedTokenId) {
-    tokenStore.updateToken(tokenStore.selectedTokenId, patch)
-    scheduleAutoSave()
+const updateToken = (tokenId: string, patch: TokenPatch): void => {
+  if ('visionRange' in patch && patch.visionRange !== undefined) {
+    tokenStore.setTokenVisionRange(tokenId, patch.visionRange)
+  } else if ('visionEnabled' in patch && patch.visionEnabled !== undefined) {
+    tokenStore.setTokenVisionEnabled(tokenId, patch.visionEnabled)
+  } else if ('color' in patch && patch.color !== undefined) {
+    tokenStore.updateTokenColor(tokenId, patch.color)
+  } else {
+    tokenStore.updateToken(tokenId, patch)
   }
+  scheduleAutoSave()
+}
+
+const updateSelectedToken = (patch: TokenPatch): void => {
+  if (tokenStore.selectedTokenId) updateToken(tokenStore.selectedTokenId, patch)
+}
+
+const deleteToken = (tokenId: string): void => {
+  spellEffectStore.deleteEffectsForCaster(tokenId)
+  tokenStore.deleteToken(tokenId)
+  appStore.setStatus('Token gelöscht')
+  scheduleAutoSave()
 }
 
 const deleteSelectedToken = (): void => {
-  const tokenId = tokenStore.selectedTokenId
-  if (tokenId) {
-    spellEffectStore.deleteEffectsForCaster(tokenId)
-  }
-  tokenStore.deleteSelectedToken()
-  appStore.setStatus('Token gelöscht')
-  scheduleAutoSave()
+  if (tokenStore.selectedTokenId) deleteToken(tokenStore.selectedTokenId)
 }
 
 const setFogEnabled = (enabled: boolean): void => {
@@ -505,6 +539,7 @@ const recordExploration = (mapId: string, levelId: string, polygons: readonly Po
         @update-token-vision-range="updateSelectedToken({ visionRange: $event })"
         @update-token-vision-angle="updateSelectedToken({ visionAngle: $event })"
         @update-token-vision-enabled="updateSelectedToken({ visionEnabled: $event })"
+        @update-token-color="updateSelectedToken({ color: $event })"
         @delete-token="deleteSelectedToken"
         @begin-token-placement="beginTokenPlacement"
         @select-spell-effect="spellEffectStore.setSelectedEffect"
@@ -526,10 +561,14 @@ const recordExploration = (mapId: string, levelId: string, polygons: readonly Po
         :persist-exploration="fogStore.persistExploration"
         :explored-mask="currentExplored"
         @drop-token="addToken"
+        @create-quick-token="addQuickToken"
         @cancel-token-placement="tokenPlacementKind = null"
         @select-token="tokenStore.setSelectedToken"
         @move-token="moveToken"
+        @update-token="updateToken"
+        @delete-token="deleteToken"
         @begin-spell-placement="beginSpellPlacement"
+        @begin-free-spell-placement="beginFreeSpellPlacement"
         @place-spell="placeSpell"
         @cancel-spell-placement="spellPlacement = null"
         @select-spell-effect="spellEffectStore.setSelectedEffect"

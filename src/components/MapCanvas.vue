@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SpellRadialMenu from '@/components/SpellRadialMenu.vue'
+import TokenContextMenu from '@/components/TokenContextMenu.vue'
 import { MapEngine, type EngineFogState } from '@/map-engine/MapEngine'
 import type { DoorState, MapDefinition } from '@/maps/api'
 import type { GridPoint, Polygon } from '@/types/geometry'
 import type { RuntimeSettings } from '@/types/settings'
 import type { PlacedSpellEffect, SpellEffectPatch, SpellPlacement } from '@/types/spells'
-import type { PlacedToken, TokenTemplate } from '@/types/tokens'
+import type { PlacedToken, QuickTokenCreation, TokenPatch, TokenTemplate } from '@/types/tokens'
 import type { VerticalTransitionConfig } from '@/map-objects'
 import type { ExplorationMask } from '@/map-engine/fog/fogState'
 
@@ -28,11 +29,15 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   dropToken: [kind: string, position: GridPoint]
+  createQuickToken: [creation: QuickTokenCreation, position: GridPoint]
   cancelTokenPlacement: []
   selectToken: [tokenId: string | null]
   moveToken: [tokenId: string, position: GridPoint]
+  updateToken: [tokenId: string, patch: TokenPatch]
+  deleteToken: [tokenId: string]
   beginSpellPlacement: [casterTokenId: string, presetId: string]
-  placeSpell: [casterTokenId: string, presetId: string, target: GridPoint]
+  beginFreeSpellPlacement: [presetId: string, origin: GridPoint]
+  placeSpell: [placement: SpellPlacement, target: GridPoint]
   cancelSpellPlacement: []
   selectSpellEffect: [effectId: string]
   updateSpellEffect: [effectId: string, patch: SpellEffectPatch]
@@ -46,8 +51,27 @@ const emit = defineEmits<{
 }>()
 
 const host = ref<HTMLElement | null>(null)
-const spellMenu = ref({ open: false, tokenId: '', tokenName: '', x: 0, y: 0 })
+type SpellMenuContext =
+  | { readonly kind: 'caster'; readonly tokenId: string; readonly label: string }
+  | { readonly kind: 'free'; readonly origin: GridPoint; readonly label: string }
+
+const spellMenu = ref<{
+  open: boolean
+  context: SpellMenuContext | null
+  x: number
+  y: number
+}>({ open: false, context: null, x: 0, y: 0 })
+const tokenContextMenu = ref<{
+  open: boolean
+  tokenId: string | null
+  x: number
+  y: number
+}>({ open: false, tokenId: null, x: 0, y: 0 })
+const contextToken = computed(
+  () => props.tokens.find((token) => token.id === tokenContextMenu.value.tokenId) ?? null,
+)
 const spellEffectDragging = ref(false)
+const editingSpellEffectId = ref<string | null>(null)
 const tokenPlacementPreview = ref<{
   readonly position: GridPoint
   readonly screen: { readonly x: number; readonly y: number }
@@ -88,7 +112,10 @@ onMounted(async () => {
     return
   }
   engine = new MapEngine(host.value, {
-    onTokenSelect: (tokenId) => emit('selectToken', tokenId),
+    onTokenSelect: (tokenId) => {
+      emit('selectToken', tokenId)
+      if (tokenContextMenu.value.tokenId !== tokenId) tokenContextMenu.value.open = false
+    },
     onTokenMove: (tokenId, position) => emit('moveToken', tokenId, position),
     onTokenLongPress: (tokenId, screenPoint) => {
       const token = props.tokens.find((entry) => entry.id === tokenId)
@@ -96,22 +123,34 @@ onMounted(async () => {
         return
       }
       const bounds = host.value.getBoundingClientRect()
-      spellMenu.value = {
+      spellMenu.value.open = false
+      tokenContextMenu.value = {
         open: true,
         tokenId,
-        tokenName: token.name,
+        x: Math.max(12, Math.min(screenPoint.x + 12, bounds.width - 320)),
+        y: Math.max(12, Math.min(screenPoint.y + 12, bounds.height - 420)),
+      }
+    },
+    onMapLongPress: (position, screenPoint) => {
+      if (!host.value) return
+      const bounds = host.value.getBoundingClientRect()
+      spellMenu.value = {
+        open: true,
+        context: { kind: 'free', origin: position, label: 'Freie Platzierung' },
         x: Math.max(12, Math.min(screenPoint.x + 12, bounds.width - 360)),
         y: Math.max(12, Math.min(screenPoint.y + 12, bounds.height - 450)),
       }
     },
-    onSpellPlace: (casterTokenId, presetId, target) =>
-      emit('placeSpell', casterTokenId, presetId, target),
+    onSpellPlace: (placement, target) => emit('placeSpell', placement, target),
     onSpellPlacementCancel: () => emit('cancelSpellPlacement'),
     onSpellEffectSelect: (effectId) => emit('selectSpellEffect', effectId),
     onSpellEffectUpdate: (effectId, patch) => emit('updateSpellEffect', effectId, patch),
     onSpellEffectDelete: (effectId) => emit('deleteSpellEffect', effectId),
     onSpellEffectDragStateChange: (active) => {
       spellEffectDragging.value = active
+    },
+    onSpellEffectEditStateChange: (effectId) => {
+      editingSpellEffectId.value = effectId
     },
     onDoorToggle: (doorId) => emit('toggleDoor', doorId),
     onLevelTransition: (transition, sourceObjectId) =>
@@ -131,13 +170,18 @@ onMounted(async () => {
 
 watch(
   () => props.map,
-  () => syncMap(),
+  () => {
+    spellMenu.value.open = false
+    tokenContextMenu.value.open = false
+    syncMap()
+  },
 )
 
 watch(
   () => props.tokens,
   () => {
     engine?.setTokens(props.tokens, props.selectedTokenId)
+    if (tokenContextMenu.value.tokenId && !contextToken.value) tokenContextMenu.value.open = false
   },
 )
 
@@ -175,6 +219,8 @@ watch(
 watch(
   () => props.levelId,
   (levelId) => {
+    spellMenu.value.open = false
+    tokenContextMenu.value.open = false
     if (levelId) {
       engine?.setLevel(levelId)
     }
@@ -258,12 +304,59 @@ const cancelTokenPlacement = (): void => {
   emit('cancelTokenPlacement')
 }
 
+const finishSpellEffectEditing = (): void => {
+  engine?.finishSpellEffectEditing()
+}
+
 const chooseSpell = (presetId: string): void => {
-  const tokenId = spellMenu.value.tokenId
+  const context = spellMenu.value.context
   spellMenu.value.open = false
-  if (tokenId) {
-    emit('beginSpellPlacement', tokenId, presetId)
+  if (context?.kind === 'caster') {
+    emit('beginSpellPlacement', context.tokenId, presetId)
+  } else if (context?.kind === 'free') {
+    emit('beginFreeSpellPlacement', presetId, context.origin)
   }
+}
+
+const createQuickToken = (creation: QuickTokenCreation): void => {
+  const context = spellMenu.value.context
+  spellMenu.value.open = false
+  if (context?.kind === 'free') {
+    emit('createQuickToken', creation, context.origin)
+  }
+}
+
+const createSpellFromTokenContext = (tokenId: string): void => {
+  const token = props.tokens.find((entry) => entry.id === tokenId)
+  if (!token) return
+  spellMenu.value = {
+    open: true,
+    context: { kind: 'caster', tokenId, label: token.name },
+    x: tokenContextMenu.value.x,
+    y: tokenContextMenu.value.y,
+  }
+  tokenContextMenu.value.open = false
+}
+
+const updateContextToken = (tokenId: string, patch: TokenPatch): void => {
+  emit('updateToken', tokenId, patch)
+}
+
+const updateContextTokenColor = (tokenId: string, color: string): void => {
+  updateContextToken(tokenId, { color })
+}
+
+const updateContextTokenVisionRange = (tokenId: string, visionRange: number): void => {
+  updateContextToken(tokenId, { visionRange })
+}
+
+const updateContextTokenVisionEnabled = (tokenId: string, visionEnabled: boolean): void => {
+  updateContextToken(tokenId, { visionEnabled })
+}
+
+const deleteContextToken = (tokenId: string): void => {
+  tokenContextMenu.value.open = false
+  emit('deleteToken', tokenId)
 }
 </script>
 
@@ -310,6 +403,12 @@ const chooseSpell = (presetId: string): void => {
       Position für die Form anklicken
       <button type="button" @click="emit('cancelSpellPlacement')">Abbrechen</button>
     </div>
+    <div v-if="editingSpellEffectId" class="spell-edit-banner" data-testid="spell-edit-banner">
+      <span>Flächenform bearbeiten</span>
+      <button type="button" data-testid="finish-spell-edit" @click="finishSpellEffectEditing">
+        Fertig
+      </button>
+    </div>
     <div
       v-if="spellEffectDragging"
       class="spell-trash-target"
@@ -321,11 +420,25 @@ const chooseSpell = (presetId: string): void => {
     </div>
     <SpellRadialMenu
       :open="spellMenu.open"
-      :token-name="spellMenu.tokenName"
+      :context-label="spellMenu.context?.label ?? ''"
+      :token-creation-enabled="spellMenu.context?.kind === 'free'"
       :x="spellMenu.x"
       :y="spellMenu.y"
       @choose="chooseSpell"
+      @create-quick-token="createQuickToken"
       @close="spellMenu.open = false"
+    />
+    <TokenContextMenu
+      :open="tokenContextMenu.open"
+      :token="contextToken"
+      :x="tokenContextMenu.x"
+      :y="tokenContextMenu.y"
+      @update-color="updateContextTokenColor"
+      @update-vision-range="updateContextTokenVisionRange"
+      @update-vision-enabled="updateContextTokenVisionEnabled"
+      @create-spell="createSpellFromTokenContext"
+      @delete-token="deleteContextToken"
+      @close="tokenContextMenu.open = false"
     />
   </main>
 </template>

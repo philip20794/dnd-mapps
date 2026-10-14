@@ -81,22 +81,42 @@ export const hexCentersForBounds = (
   width: number,
   height: number,
   margin = hexRadiusInGridUnits,
+): readonly GridPoint[] =>
+  hexCentersForRegion(width, height, { minX: 0, minY: 0, maxX: width, maxY: height }, margin)
+
+export interface GridBounds {
+  readonly minX: number
+  readonly minY: number
+  readonly maxX: number
+  readonly maxY: number
+}
+
+export const hexCentersForRegion = (
+  width: number,
+  height: number,
+  bounds: GridBounds,
+  margin = hexRadiusInGridUnits,
 ): readonly GridPoint[] => {
   const centers: GridPoint[] = []
-  const minRow = Math.floor((-hexOrigin.y - margin) / hexVerticalSpacingInGridUnits)
-  const maxRow = Math.ceil((height - hexOrigin.y + margin) / hexVerticalSpacingInGridUnits)
+  const minX = Math.max(0, bounds.minX)
+  const minY = Math.max(0, bounds.minY)
+  const maxX = Math.min(width, bounds.maxX)
+  const maxY = Math.min(height, bounds.maxY)
+  if (minX > maxX || minY > maxY) return centers
+  const minRow = Math.floor((minY - hexOrigin.y - margin) / hexVerticalSpacingInGridUnits)
+  const maxRow = Math.ceil((maxY - hexOrigin.y + margin) / hexVerticalSpacingInGridUnits)
 
   for (let row = minRow; row <= maxRow; row += 1) {
-    const minColumn = Math.floor(-hexOrigin.x - row / 2 - margin)
-    const maxColumn = Math.ceil(width - hexOrigin.x - row / 2 + margin)
+    const minColumn = Math.floor(minX - hexOrigin.x - row / 2 - margin)
+    const maxColumn = Math.ceil(maxX - hexOrigin.x - row / 2 + margin)
 
     for (let column = minColumn; column <= maxColumn; column += 1) {
       const center = axialToGrid({ q: column, r: row })
       if (
-        center.x >= -margin &&
-        center.y >= -margin &&
-        center.x <= width + margin &&
-        center.y <= height + margin
+        center.x >= minX - margin &&
+        center.y >= minY - margin &&
+        center.x <= maxX + margin &&
+        center.y <= maxY + margin
       ) {
         centers.push(center)
       }

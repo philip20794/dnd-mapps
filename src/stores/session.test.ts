@@ -81,6 +81,44 @@ describe('Session Store', () => {
     expect(restoredMapStore.selectedMapId).toBe(randomMapId)
   })
 
+  it('stellt frei platzierte Spieler und Gegner einschließlich ihrer Sichtwerte wieder her', async () => {
+    const tokenStore = useTokenStore()
+    const sessionStore = useSessionStore()
+    tokenStore.addQuickToken(
+      { category: 'player', size: 1, color: '#3456ff' },
+      'alte-krypta',
+      { x: 2, y: 3 },
+      'krypta-ebene',
+    )
+    tokenStore.addQuickToken(
+      { category: 'monster', size: 3, color: '#ff6600' },
+      'alte-krypta',
+      { x: 7, y: 8 },
+      'krypta-ebene',
+    )
+    await sessionStore.save()
+
+    setActivePinia(createPinia())
+    await expect(useSessionStore().restore()).resolves.toBe(true)
+
+    expect(useTokenStore().tokens).toEqual([
+      expect.objectContaining({
+        category: 'player',
+        size: 1,
+        color: '#3456ff',
+        visionRange: 8,
+        visionEnabled: true,
+      }),
+      expect.objectContaining({
+        category: 'monster',
+        size: 3,
+        color: '#ff6600',
+        visionRange: 0,
+        visionEnabled: false,
+      }),
+    ])
+  })
+
   it('bewahrt Plan und Seed einer über die Pipeline erzeugten Karte im Snapshot', async () => {
     const generated = await mapGenerationService.generate({ seed: 987, mapType: 'cave' })
     const mapStore = useMapStore()

@@ -29,6 +29,33 @@ export interface VisibilityInput {
 
 export interface PreparedVisibilityGeometry {
   readonly segments: readonly Segment[]
+  readonly blockers: readonly VisibilityBlocker[]
+}
+
+export type VisibilityBlockerKind = 'map-boundary' | 'wall' | 'door'
+
+export interface VisibilityBlocker {
+  readonly id: string
+  readonly kind: VisibilityBlockerKind
+  readonly segment: Segment
+}
+
+export interface VisibleVisibilityBlocker {
+  readonly blockerId: string
+  readonly kind: Exclude<VisibilityBlockerKind, 'map-boundary'>
+  readonly blockerSegment: Segment
+  readonly visibleSegment: Segment
+}
+
+export interface VisibilityRangeBoundary {
+  readonly origin: GridPoint
+  readonly range: number
+}
+
+export interface VisibilityField {
+  readonly polygon: Polygon
+  readonly rangeBoundary?: VisibilityRangeBoundary
+  readonly visibleBlockers?: readonly VisibleVisibilityBlocker[]
 }
 
 export const visibilityTokenStateKey = (tokens: readonly PlacedToken[]): string =>
@@ -242,12 +269,154 @@ const closestWallDistance = (
   return closest
 }
 
+const closestVisibilityBlockerHit = (
+  origin: GridPoint,
+  angle: number,
+  blockers: readonly VisibilityBlocker[],
+  maxDistance: number,
+): (RayHit & { readonly blocker: VisibilityBlocker }) | null => {
+  let closest: (RayHit & { readonly blocker: VisibilityBlocker }) | null = null
+  for (const blocker of blockers) {
+    const hit = raySegmentIntersection(origin, angle, blocker.segment, maxDistance)
+    if (hit && (!closest || hit.distance < closest.distance)) {
+      closest = { ...hit, blocker }
+    }
+  }
+  return closest
+}
+
 const pointOnRay = (origin: GridPoint, angle: number, distanceOnRay: number): GridPoint => ({
   x: origin.x + Math.cos(angle) * distanceOnRay,
   y: origin.y + Math.sin(angle) * distanceOnRay,
 })
 
-export const computeVisibilityPolygon = (input: VisibilityInput): Polygon => {
+interface VisibilityRaySample {
+  readonly point: GridPoint
+  readonly blocker: VisibilityBlocker | null
+}
+
+interface VisibilityComputation {
+  readonly polygon: Polygon
+  readonly visibleBlockers: readonly VisibleVisibilityBlocker[]
+}
+
+interface BlockerInterval {
+  readonly blocker: VisibilityBlocker
+  readonly start: number
+  readonly end: number
+}
+
+const segmentParameter = (segment: Segment, point: GridPoint): number => {
+  const x = segment.b.x - segment.a.x
+  const y = segment.b.y - segment.a.y
+  const lengthSquared = x * x + y * y
+  if (lengthSquared <= EPSILON * EPSILON) return 0
+  return Math.max(
+    0,
+    Math.min(1, ((point.x - segment.a.x) * x + (point.y - segment.a.y) * y) / lengthSquared),
+  )
+}
+
+const pointOnSegment = (segment: Segment, parameter: number): GridPoint => ({
+  x: segment.a.x + (segment.b.x - segment.a.x) * parameter,
+  y: segment.a.y + (segment.b.y - segment.a.y) * parameter,
+})
+
+const mergeBlockerIntervals = (
+  intervals: readonly BlockerInterval[],
+): readonly VisibleVisibilityBlocker[] => {
+  const grouped = new Map<string, BlockerInterval[]>()
+  for (const interval of intervals) {
+    if (interval.blocker.kind === 'map-boundary' || interval.end - interval.start <= EPSILON) {
+      continue
+    }
+    const entries = grouped.get(interval.blocker.id)
+    if (entries) entries.push(interval)
+    else grouped.set(interval.blocker.id, [interval])
+  }
+
+  const result: VisibleVisibilityBlocker[] = []
+  for (const entries of grouped.values()) {
+    entries.sort((left, right) => left.start - right.start)
+    const blocker = entries[0]!.blocker
+    let start = entries[0]!.start
+    let end = entries[0]!.end
+    const append = (): void => {
+      result.push({
+        blockerId: blocker.id,
+        kind: blocker.kind as Exclude<VisibilityBlockerKind, 'map-boundary'>,
+        blockerSegment: blocker.segment,
+        visibleSegment: {
+          a: pointOnSegment(blocker.segment, start),
+          b: pointOnSegment(blocker.segment, end),
+        },
+      })
+    }
+
+    for (const interval of entries.slice(1)) {
+      if (interval.start <= end + EPSILON * 4) {
+        end = Math.max(end, interval.end)
+      } else {
+        append()
+        start = interval.start
+        end = interval.end
+      }
+    }
+    append()
+  }
+  return result
+}
+
+const visibleBlockersFromSamples = (
+  samples: readonly VisibilityRaySample[],
+  wrap: boolean,
+): readonly VisibleVisibilityBlocker[] => {
+  const intervals: BlockerInterval[] = []
+  const pairCount = wrap ? samples.length : Math.max(0, samples.length - 1)
+  for (let index = 0; index < pairCount; index += 1) {
+    const left = samples[index]
+    const right = samples[(index + 1) % samples.length]
+    if (!left?.blocker || left.blocker !== right?.blocker) continue
+    const leftParameter = segmentParameter(left.blocker.segment, left.point)
+    const rightParameter = segmentParameter(left.blocker.segment, right.point)
+    intervals.push({
+      blocker: left.blocker,
+      start: Math.min(leftParameter, rightParameter),
+      end: Math.max(leftParameter, rightParameter),
+    })
+  }
+  return mergeBlockerIntervals(intervals)
+}
+
+export const combineVisibleBlockers = (
+  fields: readonly VisibilityField[],
+): readonly VisibleVisibilityBlocker[] =>
+  mergeBlockerIntervals(
+    fields.flatMap((field) =>
+      (field.visibleBlockers ?? []).map(
+        (visible): BlockerInterval => ({
+          blocker: {
+            id: visible.blockerId,
+            kind: visible.kind,
+            segment: visible.blockerSegment,
+          },
+          start: Math.min(
+            segmentParameter(visible.blockerSegment, visible.visibleSegment.a),
+            segmentParameter(visible.blockerSegment, visible.visibleSegment.b),
+          ),
+          end: Math.max(
+            segmentParameter(visible.blockerSegment, visible.visibleSegment.a),
+            segmentParameter(visible.blockerSegment, visible.visibleSegment.b),
+          ),
+        }),
+      ),
+    ),
+  )
+
+const computeVisibility = (
+  input: VisibilityInput,
+  intersectionBlockers?: readonly VisibilityBlocker[],
+): VisibilityComputation => {
   const rotation = (input.rotationDegrees * Math.PI) / 180
   const visionAngle =
     input.visionAngleDegrees === null ? null : (input.visionAngleDegrees * Math.PI) / 180
@@ -263,47 +432,88 @@ export const computeVisibilityPolygon = (input: VisibilityInput): Polygon => {
       return relativeAngle(left, rotation) - relativeAngle(right, rotation)
     })
 
-  const points: GridPoint[] = []
+  const samples: VisibilityRaySample[] = []
   const intersectionSegments = input.intersectionSegments ?? input.segments
   for (const angle of angles) {
     let closest: RayHit | null = null
-    for (const segment of intersectionSegments) {
+    let closestBlocker: VisibilityBlocker | null = null
+    const candidates = intersectionBlockers ?? intersectionSegments
+    for (const candidate of candidates) {
+      const segment = 'segment' in candidate ? candidate.segment : candidate
       const hit = raySegmentIntersection(input.origin, angle, segment, input.range)
       if (hit && (!closest || hit.distance < closest.distance)) {
         closest = hit
+        closestBlocker = 'segment' in candidate ? candidate : null
       }
     }
 
-    points.push(
-      closest?.point ?? {
+    samples.push({
+      point: closest?.point ?? {
         x: input.origin.x + Math.cos(angle) * input.range,
         y: input.origin.y + Math.sin(angle) * input.range,
       },
-    )
+      blocker: closestBlocker,
+    })
   }
 
-  return points
+  return {
+    polygon: samples.map((sample) => sample.point),
+    visibleBlockers: intersectionBlockers
+      ? visibleBlockersFromSamples(samples, visionAngle === null)
+      : [],
+  }
 }
+
+export const computeVisibilityPolygon = (input: VisibilityInput): Polygon =>
+  computeVisibility(input).polygon
 
 export const visibilitySegmentsForMap = (
   map: MapDefinition,
   doorStates: Readonly<Record<string, DoorState>>,
   levelId = getDefaultLevelId(map),
-): readonly Segment[] => [
-  ...mapBoundarySegments(map),
-  ...map.walls
-    .filter((wall) => wall.blocksSight && entryLevelId(wall, map) === levelId)
-    .map((wall) => ({ a: wall.a, b: wall.b })),
-  ...doorVisibilitySegments(map.doors, doorStates, map, levelId),
+): readonly Segment[] =>
+  visibilityBlockersForMap(map, doorStates, levelId).map((blocker) => blocker.segment)
+
+export const visibilityBlockersForMap = (
+  map: MapDefinition,
+  doorStates: Readonly<Record<string, DoorState>>,
+  levelId = getDefaultLevelId(map),
+): readonly VisibilityBlocker[] => [
+  ...mapBoundarySegments(map).map(
+    (segment, index): VisibilityBlocker => ({
+      id: `map-boundary:${index}`,
+      kind: 'map-boundary',
+      segment,
+    }),
+  ),
+  ...map.walls.flatMap((wall, index): readonly VisibilityBlocker[] =>
+    wall.blocksSight && entryLevelId(wall, map) === levelId
+      ? [
+          {
+            id: `wall:${wall.id ?? index}`,
+            kind: 'wall',
+            segment: { a: wall.a, b: wall.b },
+          },
+        ]
+      : [],
+  ),
+  ...map.doors.flatMap((door): readonly VisibilityBlocker[] =>
+    entryLevelId(door, map) === levelId &&
+    (doorStates[door.id] ?? door.defaultState) === 'closed' &&
+    door.blocksSightWhenClosed
+      ? [{ id: `door:${door.id}`, kind: 'door', segment: door.segment }]
+      : [],
+  ),
 ]
 
 export const prepareVisibilityGeometry = (
   map: MapDefinition,
   doorStates: Readonly<Record<string, DoorState>>,
   levelId = getDefaultLevelId(map),
-): PreparedVisibilityGeometry => ({
-  segments: visibilitySegmentsForMap(map, doorStates, levelId),
-})
+): PreparedVisibilityGeometry => {
+  const blockers = visibilityBlockersForMap(map, doorStates, levelId)
+  return { blockers, segments: blockers.map((blocker) => blocker.segment) }
+}
 
 export const visibilitySegmentsNear = (
   segments: readonly Segment[],
@@ -316,6 +526,24 @@ export const visibilitySegmentsNear = (
   const maxY = origin.y + range
   return segments.filter(
     (segment) =>
+      Math.max(segment.a.x, segment.b.x) >= minX &&
+      Math.min(segment.a.x, segment.b.x) <= maxX &&
+      Math.max(segment.a.y, segment.b.y) >= minY &&
+      Math.min(segment.a.y, segment.b.y) <= maxY,
+  )
+}
+
+export const visibilityBlockersNear = (
+  blockers: readonly VisibilityBlocker[],
+  origin: GridPoint,
+  range: number,
+): readonly VisibilityBlocker[] => {
+  const minX = origin.x - range
+  const maxX = origin.x + range
+  const minY = origin.y - range
+  const maxY = origin.y + range
+  return blockers.filter(
+    ({ segment }) =>
       Math.max(segment.a.x, segment.b.x) >= minX &&
       Math.min(segment.a.x, segment.b.x) <= maxX &&
       Math.max(segment.a.y, segment.b.y) >= minY &&
@@ -374,59 +602,91 @@ export const combineVisibilityPolygonsWithPreparedGeometry = (
   geometry: PreparedVisibilityGeometry,
   lightSources: readonly FogLightSource[],
   levelId = getDefaultLevelId(map),
-): readonly Polygon[] => {
+): readonly Polygon[] =>
+  combineVisibilityFieldsWithPreparedGeometry(tokens, map, geometry, lightSources, levelId).map(
+    (field) => field.polygon,
+  )
+
+export const combineVisibilityFieldsWithPreparedGeometry = (
+  tokens: readonly PlacedToken[],
+  map: MapDefinition,
+  geometry: PreparedVisibilityGeometry,
+  lightSources: readonly FogLightSource[],
+  levelId = getDefaultLevelId(map),
+): readonly VisibilityField[] => {
   const segments = geometry.segments
+  const blockers = geometry.blockers
   const tokenPolygons = tokens
     .filter((token) => (token.levelId ?? getDefaultLevelId(map)) === levelId)
     .map((token) =>
       token.visionEnabled && token.visionRange > 0
         ? (() => {
-            const nearbySegments = visibilitySegmentsNear(
-              segments,
+            const nearbyBlockers = visibilityBlockersNear(
+              blockers,
               token.position,
               token.visionRange,
             )
+            const visibility = computeVisibility(
+              {
+                origin: token.position,
+                range: token.visionRange,
+                rotationDegrees: token.rotation,
+                visionAngleDegrees: token.visionAngle,
+                segments,
+                intersectionSegments: nearbyBlockers.map((blocker) => blocker.segment),
+              },
+              nearbyBlockers,
+            )
             return {
-            token,
-            polygon: computeVisibilityPolygon({
-              origin: token.position,
-              range: token.visionRange,
-              rotationDegrees: token.rotation,
-              visionAngleDegrees: token.visionAngle,
-              segments,
-              intersectionSegments: nearbySegments,
-            }),
+              token,
+              polygon: visibility.polygon,
+              visibleBlockers: visibility.visibleBlockers,
             }
           })()
         : null,
     )
     .filter(
-      (entry): entry is { readonly token: PlacedToken; readonly polygon: Polygon } =>
-        entry !== null && entry.polygon.length > 2,
+      (
+        entry,
+      ): entry is {
+        readonly token: PlacedToken
+        readonly polygon: Polygon
+        readonly visibleBlockers: readonly VisibleVisibilityBlocker[]
+      } => entry !== null && entry.polygon.length > 2,
     )
 
   const radialLights = lightSources.filter(isRadialLightSource)
   const daylightAreas = lightSources.filter(isDaylightAreaSource)
 
-  const lightPolygons = tokenPolygons
+  const lightFields = tokenPolygons
     .flatMap(({ token, polygon }) =>
-      radialLights.map((light) =>
+      radialLights.map<VisibilityField | null>((light) =>
         tokenCanActivateLight(token, polygon, light, segments)
-          ? computeTokenLimitedLightPolygon(token, light, segments)
-          : [],
+          ? computeTokenLimitedLightField(token, light, blockers)
+          : null,
       ),
     )
-    .filter((polygon): polygon is Polygon => polygon.length > 2)
+    .filter((field): field is VisibilityField => field !== null && field.polygon.length > 2)
 
-  const daylightPolygons = tokenPolygons
+  const daylightFields = tokenPolygons
     .flatMap(({ token }) =>
-      daylightAreas.map((area) =>
-        pointInBounds(token.position, area.bounds) ? daylightPolygon(area) : [],
+      daylightAreas.map<VisibilityField | null>((area) =>
+        pointInBounds(token.position, area.bounds) ? { polygon: daylightPolygon(area) } : null,
       ),
     )
-    .filter((polygon): polygon is Polygon => polygon.length > 2)
+    .filter((field): field is VisibilityField => field !== null && field.polygon.length > 2)
 
-  return [...tokenPolygons.map((entry) => entry.polygon), ...lightPolygons, ...daylightPolygons]
+  return [
+    ...tokenPolygons.map(
+      ({ token: visibleToken, polygon, visibleBlockers }): VisibilityField => ({
+        polygon,
+        rangeBoundary: { origin: visibleToken.position, range: visibleToken.visionRange },
+        visibleBlockers,
+      }),
+    ),
+    ...lightFields,
+    ...daylightFields,
+  ]
 }
 
 const tokenCanActivateLight = (
@@ -463,11 +723,11 @@ const tokenCanActivateLight = (
   )
 }
 
-const computeTokenLimitedLightPolygon = (
+const computeTokenLimitedLightField = (
   token: PlacedToken,
   light: FogRadialLightSource,
-  segments: readonly Segment[],
-): Polygon => {
+  blockers: readonly VisibilityBlocker[],
+): VisibilityField => {
   const distanceToLight = distance(token.position, light.position)
   const centerAngle = Math.atan2(
     light.position.y - token.position.y,
@@ -478,8 +738,10 @@ const computeTokenLimitedLightPolygon = (
   const rotation = (token.rotation * Math.PI) / 180
   const visionAngle = token.visionAngle === null ? null : (token.visionAngle * Math.PI) / 180
   const maxDistance = distanceToLight + light.range
+  const nearbyBlockers = visibilityBlockersNear(blockers, token.position, maxDistance)
   const outerPoints: GridPoint[] = []
   const innerPoints: GridPoint[] = []
+  const outerSamples: VisibilityRaySample[] = []
 
   for (let index = 0; index <= LIGHT_RAY_COUNT; index += 1) {
     const angle = centerAngle - halfAngle + (halfAngle * 2 * index) / LIGHT_RAY_COUNT
@@ -492,19 +754,34 @@ const computeTokenLimitedLightPolygon = (
       continue
     }
 
-    const wallDistance = closestWallDistance(token.position, angle, segments, maxDistance)
-    const far = Math.min(circleHit.far, wallDistance)
+    const blockerHit = closestVisibilityBlockerHit(
+      token.position,
+      angle,
+      nearbyBlockers,
+      maxDistance,
+    )
+    const far = Math.min(circleHit.far, blockerHit?.distance ?? maxDistance)
     if (far + EPSILON < circleHit.near) {
       continue
     }
 
     innerPoints.push(pointOnRay(token.position, angle, circleHit.near))
-    outerPoints.push(pointOnRay(token.position, angle, far))
+    const outerPoint = pointOnRay(token.position, angle, far)
+    outerPoints.push(outerPoint)
+    outerSamples.push({
+      point: outerPoint,
+      blocker:
+        blockerHit && blockerHit.distance <= circleHit.far + EPSILON ? blockerHit.blocker : null,
+    })
   }
 
   if (outerPoints.length < 2) {
-    return []
+    return { polygon: [], rangeBoundary: { origin: light.position, range: light.range } }
   }
 
-  return [...outerPoints, ...innerPoints.reverse()]
+  return {
+    polygon: [...outerPoints, ...innerPoints.reverse()],
+    rangeBoundary: { origin: light.position, range: light.range },
+    visibleBlockers: visibleBlockersFromSamples(outerSamples, false),
+  }
 }

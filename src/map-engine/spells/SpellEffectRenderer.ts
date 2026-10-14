@@ -1,10 +1,11 @@
 import { Container, Graphics, Text } from 'pixi.js'
 import { spellEffectSizeLabel, type PlacedSpellEffect } from '@/types/spells'
 import type { PlacedToken } from '@/types/tokens'
-import { gridToPixels, hexCentersForBounds, hexCorners } from '../grid/coordinates'
+import { gridToPixels, hexCentersForRegion, hexCorners } from '../grid/coordinates'
 import {
   pointIsInsideSpellEffect,
   resolveSpellEffectPosition,
+  spellEffectWorldBounds,
   spellEffectLocalHandles,
   worldPointToEffectLocal,
 } from './geometry'
@@ -13,9 +14,32 @@ export interface SpellEffectPreview {
   readonly effect: PlacedSpellEffect
 }
 
+export type SpellEffectActiveMode = 'move' | 'resize' | 'rotate' | null
+
+interface RenderedSpellEffect {
+  container: Container
+  signature: string
+}
+
 const colorNumber = (color: string): number => Number.parseInt(color.replace('#', ''), 16)
 
 export class SpellEffectRenderer {
+  private readonly visuals = new Map<string, RenderedSpellEffect>()
+  private previewContainer: Container | null = null
+
+  public clear(): void {
+    for (const visual of this.visuals.values()) {
+      visual.container.parent?.removeChild(visual.container)
+      visual.container.destroy({ children: true })
+    }
+    this.visuals.clear()
+    if (this.previewContainer) {
+      this.previewContainer.parent?.removeChild(this.previewContainer)
+      this.previewContainer.destroy({ children: true })
+      this.previewContainer = null
+    }
+  }
+
   public render(
     layer: Container,
     effects: readonly PlacedSpellEffect[],
@@ -25,8 +49,17 @@ export class SpellEffectRenderer {
     mapWidth: number,
     mapHeight: number,
     preview: SpellEffectPreview | null = null,
+    editingEffectId: string | null = null,
+    activeEffectId: string | null = null,
+    activeMode: SpellEffectActiveMode = null,
   ): void {
-    layer.removeChildren().forEach((child) => child.destroy({ children: true }))
+    const activeIds = new Set(effects.map((effect) => effect.id))
+    for (const [effectId, visual] of this.visuals) {
+      if (activeIds.has(effectId)) continue
+      layer.removeChild(visual.container)
+      visual.container.destroy({ children: true })
+      this.visuals.delete(effectId)
+    }
 
     for (const effect of effects) {
       const caster = tokens.find((token) => token.id === effect.casterTokenId)
@@ -34,23 +67,82 @@ export class SpellEffectRenderer {
         ...effect,
         position: resolveSpellEffectPosition(effect, caster?.position),
       }
-      layer.addChild(
-        this.createEffectContainer(
-          resolved,
-          gridSize,
-          mapWidth,
-          mapHeight,
-          effect.id === selectedEffectId,
-          false,
-        ),
+      const selected = effect.id === selectedEffectId
+      const editing = effect.id === editingEffectId
+      const effectActiveMode = effect.id === activeEffectId ? activeMode : null
+      const signature = this.effectSignature(resolved, selected, editing, effectActiveMode)
+      const current = this.visuals.get(effect.id)
+      if (current?.signature === signature && current.container.parent === layer) continue
+      const container = this.createEffectContainer(
+        resolved,
+        gridSize,
+        mapWidth,
+        mapHeight,
+        selected,
+        editing,
+        effectActiveMode,
+        false,
       )
+      if (current?.container.parent === layer) {
+        const index = layer.getChildIndex(current.container)
+        layer.removeChild(current.container)
+        current.container.destroy({ children: true })
+        layer.addChildAt(container, Math.min(index, layer.children.length))
+      } else {
+        layer.addChild(container)
+      }
+      this.visuals.set(effect.id, { container, signature })
     }
 
-    if (preview) {
-      layer.addChild(
-        this.createEffectContainer(preview.effect, gridSize, mapWidth, mapHeight, true, true),
-      )
+    if (this.previewContainer) {
+      layer.removeChild(this.previewContainer)
+      this.previewContainer.destroy({ children: true })
+      this.previewContainer = null
     }
+    if (preview) {
+      this.previewContainer = this.createEffectContainer(
+        preview.effect,
+        gridSize,
+        mapWidth,
+        mapHeight,
+        true,
+        false,
+        null,
+        true,
+      )
+      layer.addChild(this.previewContainer)
+    }
+  }
+
+  public moveEffect(
+    effectId: string,
+    position: PlacedSpellEffect['position'],
+    gridSize: number,
+  ): void {
+    const visual = this.visuals.get(effectId)
+    if (!visual) return
+    const pixels = gridToPixels(position, gridSize)
+    visual.container.position.set(pixels.x, pixels.y)
+  }
+
+  private effectSignature(
+    effect: PlacedSpellEffect,
+    selected: boolean,
+    editing: boolean,
+    activeMode: SpellEffectActiveMode,
+  ): string {
+    return [
+      effect.position.x,
+      effect.position.y,
+      effect.rotation,
+      effect.size,
+      effect.width,
+      effect.color,
+      effect.shape,
+      selected ? 1 : 0,
+      editing ? 1 : 0,
+      activeMode ?? '',
+    ].join('|')
   }
 
   private createEffectContainer(
@@ -59,6 +151,8 @@ export class SpellEffectRenderer {
     mapWidth: number,
     mapHeight: number,
     selected: boolean,
+    editing: boolean,
+    activeMode: SpellEffectActiveMode,
     preview: boolean,
   ): Container {
     const container = new Container()
@@ -72,8 +166,8 @@ export class SpellEffectRenderer {
     const size = effect.size * gridSize
     const width = Math.max(effect.width * gridSize, gridSize * 0.16)
     const fillAlpha = preview ? 0.28 : 0.2
-    const strokeWidth = selected ? Math.max(4, gridSize * 0.075) : Math.max(2, gridSize * 0.04)
-    const strokeAlpha = selected ? 1 : 0.78
+    const strokeWidth = editing ? Math.max(4, gridSize * 0.075) : Math.max(2, gridSize * 0.04)
+    const strokeAlpha = editing ? 1 : selected ? 0.88 : 0.72
 
     switch (effect.shape) {
       case 'sphere':
@@ -124,7 +218,7 @@ export class SpellEffectRenderer {
       .stroke({ color, width: 2, alpha: 1 })
     container.addChild(area, origin)
 
-    if (selected && !preview) {
+    if (editing && !preview) {
       const handles = spellEffectLocalHandles(effect)
       const controls = new Graphics()
       controls
@@ -146,12 +240,36 @@ export class SpellEffectRenderer {
         .fill({ color: 0xf3d37a, alpha: 1 })
         .stroke({ color: 0xffffff, alpha: 1, width: 2 })
       container.addChild(controls)
+
+      const modeLabel =
+        activeMode === 'move'
+          ? '↔ VERSCHIEBEN'
+          : activeMode === 'resize'
+            ? '↔ GRÖSSE'
+            : activeMode === 'rotate'
+              ? '↻ DREHEN'
+              : 'BEARBEITEN'
+      const indicator = new Text({
+        text: modeLabel,
+        style: {
+          fill: 0xffffff,
+          fontFamily: 'system-ui, sans-serif',
+          fontSize: Math.max(10, gridSize * 0.2),
+          fontWeight: '800',
+          stroke: { color: 0x111318, width: 4 },
+        },
+      })
+      indicator.anchor.set(0.5, 0)
+      indicator.position.set(0, Math.max(gridSize * 0.22, effect.shape === 'sphere' ? size : width))
+      indicator.rotation = (-effect.rotation * Math.PI) / 180
+      container.addChild(indicator)
     }
 
-    if (selected || preview) {
+    if ((selected || preview) && activeMode === null) {
       const affected = new Graphics()
       const absoluteEffect = { ...effect, rotation: effect.rotation }
-      for (const center of hexCentersForBounds(mapWidth, mapHeight)) {
+      const effectBounds = spellEffectWorldBounds(absoluteEffect)
+      for (const center of hexCentersForRegion(mapWidth, mapHeight, effectBounds)) {
         if (!pointIsInsideSpellEffect(center, absoluteEffect)) {
           continue
         }

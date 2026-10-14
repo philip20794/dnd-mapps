@@ -256,3 +256,53 @@ test('platziert eine Token-Vorlage per Touch-Tap auf der Karte', async ({ page }
   await expect(page.getByTestId('token-properties')).toBeVisible()
   expect(pageErrors).toEqual([])
 })
+
+test('erstellt einen Spieler über das freie Long-Press-Menü', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.goto('/')
+  await page.getByTestId('toggle-sidebar-button').click()
+  await expect(page.getByTestId('sidebar')).toBeVisible()
+  const canvas = page.getByTestId('map-canvas').locator('canvas')
+  await expect(canvas).toBeVisible()
+
+  await canvas.evaluate(async (element) => {
+    const bounds = element.getBoundingClientRect()
+    element.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 127,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: 0,
+        buttons: 1,
+        clientX: bounds.left + bounds.width * 0.7,
+        clientY: bounds.top + bounds.height * 0.7,
+      }),
+    )
+    await new Promise((resolve) => window.setTimeout(resolve, 560))
+    window.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 127,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: 0,
+        buttons: 0,
+        clientX: bounds.left + bounds.width * 0.7,
+        clientY: bounds.top + bounds.height * 0.7,
+      }),
+    )
+  })
+
+  await expect(page.getByTestId('spell-radial-menu')).toBeVisible()
+  await page.getByTestId('creation-category-tokens').click()
+  await page.getByTestId('quick-token-player').click()
+  await page.getByTestId('create-quick-token').click()
+
+  await expect(page.getByTestId('spell-radial-menu')).toBeHidden()
+  await expect(page.getByTestId('token-name-input')).toHaveValue('Spieler')
+  expect(pageErrors).toEqual([])
+})

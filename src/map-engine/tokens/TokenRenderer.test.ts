@@ -155,7 +155,13 @@ describe('TokenRenderer', () => {
     const renderer = new TokenRenderer()
     const layer = new Container()
     const selectionLayer = new Container()
-    const tokens = [token('first', 2), token('second', 4), token('third', 6)]
+    const tokens = [
+      token('first', 2),
+      token('second', 4),
+      token('third', 6),
+      token('fourth', 8),
+      token('fifth', 10),
+    ]
     const moves: Array<{ tokenId: string; position: { x: number; y: number } }> = []
     const dragHandlers: TokenRendererHandlers = {
       ...handlers,
@@ -163,7 +169,7 @@ describe('TokenRenderer', () => {
     }
     renderTokens(renderer, layer, selectionLayer, tokens, null, dragHandlers)
 
-    for (const [index, pointerId] of [11, 12, 13].entries()) {
+    for (const [index, pointerId] of [11, 12, 13, 14, 15].entries()) {
       emitPointerDown(layer.children[index], pointerId, tokens[index]!.position.x * 48)
       renderer.dragToScreenPoint(
         pointerId,
@@ -175,16 +181,26 @@ describe('TokenRenderer', () => {
 
     // A Pinia/selection update with stale positions must not move active visuals back.
     renderTokens(renderer, layer, selectionLayer, tokens, 'second', dragHandlers)
-    expect(layer.children.map((child) => child.position.x)).toEqual([144, 240, 336])
+    expect(layer.children.map((child) => child.position.x)).toEqual([144, 240, 336, 432, 528])
 
     expect(renderer.finishDrag(12, { visible: true, snap: true }, 48, dragHandlers)).toBe(true)
     expect(renderer.isPointerActiveFor(11)).toBe(true)
     expect(renderer.isPointerActiveFor(13)).toBe(true)
+    expect(renderer.isPointerActiveFor(14)).toBe(true)
+    expect(renderer.isPointerActiveFor(15)).toBe(true)
     expect(moves).toEqual([{ tokenId: 'second', position: expect.objectContaining({ x: 5 }) }])
 
     renderer.finishDrag(11, { visible: true, snap: true }, 48, dragHandlers)
     renderer.finishDrag(13, { visible: true, snap: true }, 48, dragHandlers)
-    expect(moves.map((move) => move.tokenId)).toEqual(['second', 'first', 'third'])
+    renderer.finishDrag(14, { visible: true, snap: true }, 48, dragHandlers)
+    renderer.finishDrag(15, { visible: true, snap: true }, 48, dragHandlers)
+    expect(moves.map((move) => move.tokenId)).toEqual([
+      'second',
+      'first',
+      'third',
+      'fourth',
+      'fifth',
+    ])
   })
 
   it('bricht nur den angegebenen Pointer ab und sperrt doppelte Token-Zugriffe', () => {

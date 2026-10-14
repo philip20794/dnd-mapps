@@ -20,6 +20,7 @@ const emit = defineEmits<{
   updateTokenVisionRange: [value: number]
   updateTokenVisionAngle: [value: number | null]
   updateTokenVisionEnabled: [value: boolean]
+  updateTokenColor: [value: string]
   deleteToken: []
   beginTokenPlacement: [kind: string]
   selectSpellEffect: [effectId: string]
@@ -91,6 +92,7 @@ const handleTemplatePointerUp = (event: PointerEvent, kind: string): void => {
         @update-vision-range="emit('updateTokenVisionRange', $event)"
         @update-vision-angle="emit('updateTokenVisionAngle', $event)"
         @update-vision-enabled="emit('updateTokenVisionEnabled', $event)"
+        @update-color="emit('updateTokenColor', $event)"
         @delete-token="emit('deleteToken')"
       />
 

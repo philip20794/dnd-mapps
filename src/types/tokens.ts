@@ -1,6 +1,22 @@
 import type { GridPoint } from './geometry'
 
 export type TokenCategory = 'player' | 'npc' | 'monster' | 'undead'
+export type QuickTokenCategory = 'player' | 'monster'
+
+export const tokenSizeOptions = [
+  { id: 'small', label: 'Small', size: 0.6 },
+  { id: 'medium', label: 'Medium', size: 1 },
+  { id: 'large', label: 'Large', size: 2 },
+  { id: 'huge', label: 'Huge', size: 3 },
+] as const
+
+export type TokenSizeId = (typeof tokenSizeOptions)[number]['id']
+
+export interface QuickTokenCreation {
+  readonly category: QuickTokenCategory
+  readonly size: number
+  readonly color: string
+}
 
 export interface TokenTemplate {
   readonly kind: string
@@ -37,6 +53,7 @@ export interface TokenPatch {
   readonly visionRange?: number
   readonly visionAngle?: number | null
   readonly visionEnabled?: boolean
+  readonly color?: string
 }
 
 export const tokenTemplates: readonly TokenTemplate[] = [

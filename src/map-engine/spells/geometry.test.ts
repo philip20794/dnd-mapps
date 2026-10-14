@@ -3,6 +3,7 @@ import {
   effectLocalToWorld,
   pointIsInsideSpellEffect,
   spellEffectLocalHandles,
+  spellEffectWorldBounds,
   worldPointToEffectLocal,
 } from './geometry'
 import type { PlacedSpellEffect } from '@/types/spells'
@@ -58,6 +59,17 @@ describe('Zauberflächen-Geometrie', () => {
     expect(worldPointToEffectLocal(world, rotated).x).toBeCloseTo(3)
     expect(worldPointToEffectLocal(world, rotated).y).toBeCloseTo(0)
   })
+
+  it('begrenzt den Prüfbereich einer gedrehten Form auf deren tatsächliche Umgebung', () => {
+    const bounds = spellEffectWorldBounds(
+      effect('line', { position: { x: 40, y: 60 }, size: 8, width: 2, rotation: 90 }),
+    )
+
+    expect(bounds.minX).toBeCloseTo(39)
+    expect(bounds.maxX).toBeCloseTo(41)
+    expect(bounds.minY).toBeCloseTo(60)
+    expect(bounds.maxY).toBeCloseTo(68)
+  })
 })
 
 describe('spell effect labels', () => {
@@ -66,8 +78,8 @@ describe('spell effect labels', () => {
     expect(spellEffectSizeLabel(effect('cone', { name: 'Kegel', size: 4, width: 1 }))).toBe(
       '20 × 20 ft Kegel',
     )
-    expect(
-      spellEffectSizeLabel(effect('line', { name: 'Linie', size: 4, width: 1.5 })),
-    ).toBe('20 × 7.5 ft Linie')
+    expect(spellEffectSizeLabel(effect('line', { name: 'Linie', size: 4, width: 1.5 }))).toBe(
+      '20 × 7.5 ft Linie',
+    )
   })
 })

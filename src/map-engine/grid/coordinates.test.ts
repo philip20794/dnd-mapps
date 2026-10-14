@@ -9,6 +9,7 @@ import {
 import {
   gridToPixels,
   hexCorners,
+  hexCentersForRegion,
   hexRadiusInGridUnits,
   pixelsToGrid,
   rotateWorldPoint,
@@ -36,6 +37,19 @@ describe('Raster- und Kamera-Koordinaten', () => {
     expect(corners).toHaveLength(6)
     expect(corners[0]?.x).toBeCloseTo(2)
     expect(corners[0]?.y).toBeCloseTo(3 - hexRadiusInGridUnits)
+  })
+
+  it('begrenzt Hex-Abfragen auf einen lokalen Bereich großer Karten', () => {
+    const centers = hexCentersForRegion(1000, 1000, {
+      minX: 495,
+      minY: 495,
+      maxX: 505,
+      maxY: 505,
+    })
+
+    expect(centers.length).toBeGreaterThan(0)
+    expect(centers.length).toBeLessThan(250)
+    expect(centers.every((point) => point.x > 494 && point.x < 506)).toBe(true)
   })
 
   it('wandelt Welt- und Bildschirmkoordinaten mit Kamera korrekt um', () => {

@@ -39,7 +39,11 @@ import {
 import { createLayerMap, layerOrder, type PixiLayerMap } from './layers'
 import { collectFogLightSources } from './lighting/lightSources'
 import { ResourceManager } from './resources/ResourceManager'
-import { SpellEffectRenderer, type SpellEffectPreview } from './spells/SpellEffectRenderer'
+import {
+  SpellEffectRenderer,
+  type SpellEffectActiveMode,
+  type SpellEffectPreview,
+} from './spells/SpellEffectRenderer'
 import {
   effectLocalToWorld,
   pointIsInsideSpellEffect,
@@ -53,10 +57,11 @@ import {
   type TokenRendererHandlers,
 } from './tokens/TokenRenderer'
 import {
-  combineVisibilityPolygonsWithPreparedGeometry,
+  combineVisibilityFieldsWithPreparedGeometry,
   prepareVisibilityGeometry,
   visibilityTokenStateKey,
   type PreparedVisibilityGeometry,
+  type VisibilityField,
 } from './visibility/visibility'
 import type { FogLightSource } from './lighting/lightSources'
 import { MaterialRenderer, type RenderedMaterialLayers } from './materials/MaterialRenderer'
@@ -77,12 +82,14 @@ export interface MapEngineHandlers {
   readonly onTokenSelect: (tokenId: string | null) => void
   readonly onTokenMove: (tokenId: string, position: GridPoint) => void
   readonly onTokenLongPress: (tokenId: string, screenPoint: PixelPoint) => void
-  readonly onSpellPlace: (casterTokenId: string, presetId: string, target: GridPoint) => void
+  readonly onMapLongPress: (position: GridPoint, screenPoint: PixelPoint) => void
+  readonly onSpellPlace: (placement: SpellPlacement, target: GridPoint) => void
   readonly onSpellPlacementCancel: () => void
   readonly onSpellEffectSelect: (effectId: string) => void
   readonly onSpellEffectUpdate: (effectId: string, patch: SpellEffectPatch) => void
   readonly onSpellEffectDelete: (effectId: string) => void
   readonly onSpellEffectDragStateChange: (active: boolean) => void
+  readonly onSpellEffectEditStateChange: (effectId: string | null) => void
   readonly onDoorToggle: (doorId: string) => void
   readonly onLevelTransition: (transition: VerticalTransitionConfig, sourceObjectId: string) => void
   readonly onCameraChange: (camera: RuntimeSettings['camera']) => void
@@ -95,7 +102,20 @@ interface PanState {
   readonly last: { readonly x: number; readonly y: number }
 }
 
-type SpellEffectInteractionMode = 'pending-move' | 'move' | 'resize' | 'rotate'
+interface MapLongPressState {
+  readonly pointerId: number
+  readonly startScreen: PixelPoint
+  readonly position: GridPoint
+  timer: number | null
+}
+
+type SpellEffectInteractionMode =
+  | 'pending-long-press'
+  | 'blocked'
+  | 'move-ready'
+  | 'move'
+  | 'resize'
+  | 'rotate'
 
 interface SpellEffectInteraction {
   readonly pointerId: number
@@ -103,6 +123,8 @@ interface SpellEffectInteraction {
   readonly mode: SpellEffectInteractionMode
   readonly startGrid: GridPoint
   readonly startScreen: PixelPoint
+  workingEffect: PlacedSpellEffect
+  pendingPatch: SpellEffectPatch | null
 }
 
 export class MapEngine {
@@ -129,11 +151,16 @@ export class MapEngine {
   private spellPlacementTarget: GridPoint | null = null
   private spellEffectInteraction: SpellEffectInteraction | null = null
   private spellEffectLongPressTimer: number | null = null
+  private editingSpellEffectId: string | null = null
+  private spellEffectFrame: number | null = null
+  private pendingSpellEffectPoint: GridPoint | null = null
   private doorStates: Readonly<Record<string, DoorState>> = {}
   private settings: RuntimeSettings = defaultRuntimeSettings
   private fogState: EngineFogState = { enabled: false, persistExploration: true, explored: null }
   private currentVisiblePolygons: readonly Polygon[] = []
+  private currentVisibilityFields: readonly VisibilityField[] = []
   private panState: PanState | null = null
+  private mapLongPress: MapLongPressState | null = null
   private readonly touchCameraGesture = new TouchCameraGesture()
   private touchCameraFrame: number | null = null
   private readonly capturedPointerIds = new Set<number>()
@@ -249,22 +276,42 @@ export class MapEngine {
   ): void {
     this.spellEffects = effects
     this.selectedSpellEffectId = selectedSpellEffectId
+    if (
+      this.editingSpellEffectId &&
+      this.editingSpellEffectId !== selectedSpellEffectId &&
+      !this.spellEffectInteraction
+    ) {
+      this.setSpellEffectEditing(null)
+    }
+    this.renderSpellEffects()
+  }
+
+  public finishSpellEffectEditing(): void {
+    this.cancelSpellEffectInteraction()
+    this.setSpellEffectEditing(null)
     this.renderSpellEffects()
   }
 
   public setSpellPlacement(placement: SpellPlacement | null): void {
-    if (placement) this.cancelTouchCameraGesture()
+    if (placement) {
+      this.cancelTouchCameraGesture()
+      this.cancelSpellEffectInteraction()
+      this.setSpellEffectEditing(null)
+    }
     this.spellPlacement = placement
-    const caster = placement
-      ? this.tokens.find((token) => token.id === placement.casterTokenId)
-      : undefined
+    const caster =
+      placement?.kind === 'caster'
+        ? this.tokens.find((token) => token.id === placement.casterTokenId)
+        : undefined
     const preset = placement ? findSpellAreaPreset(placement.presetId) : undefined
     this.spellPlacementTarget =
-      caster && preset
-        ? preset.origin === 'caster'
-          ? { x: caster.position.x + preset.sizeFeet / FEET_PER_GRID_UNIT, y: caster.position.y }
-          : caster.position
-        : null
+      placement?.kind === 'free'
+        ? placement.origin
+        : caster && preset
+          ? preset.origin === 'caster'
+            ? { x: caster.position.x + preset.sizeFeet / FEET_PER_GRID_UNIT, y: caster.position.y }
+            : caster.position
+          : null
     this.layers.tokens.interactiveChildren = placement === null
     this.renderSpellEffects()
   }
@@ -364,6 +411,7 @@ export class MapEngine {
     this.removeDomEvents()
     this.staticChunkRenderer?.destroy()
     this.staticChunkRenderer = null
+    this.spellEffectRenderer.clear()
     this.cleanupRuntimeObjects()
     this.fogRenderer.destroy()
     this.animations.destroy()
@@ -379,6 +427,7 @@ export class MapEngine {
 
     this.staticChunkRenderer?.destroy()
     this.staticChunkRenderer = null
+    this.spellEffectRenderer.clear()
     this.renderedMaterials = null
     this.cleanupRuntimeObjects()
     for (const layerName of layerOrder) {
@@ -544,15 +593,28 @@ export class MapEngine {
     if (!this.map) {
       return
     }
+    const interaction = this.spellEffectInteraction
+    const effects = this.activeSpellEffects().map((effect) =>
+      interaction?.effect.id === effect.id ? interaction.workingEffect : effect,
+    )
+    const activeMode: SpellEffectActiveMode =
+      interaction?.mode === 'move' ||
+      interaction?.mode === 'resize' ||
+      interaction?.mode === 'rotate'
+        ? interaction.mode
+        : null
     this.spellEffectRenderer.render(
       this.layers.spellEffects,
-      this.activeSpellEffects(),
+      effects,
       this.activeTokens(),
       this.selectedSpellEffectId,
       this.map.gridSize,
       this.map.width,
       this.map.height,
       this.createSpellPreview(),
+      this.editingSpellEffectId,
+      activeMode ? (interaction?.effect.id ?? null) : null,
+      activeMode,
     )
   }
 
@@ -560,18 +622,27 @@ export class MapEngine {
     if (!this.map || !this.spellPlacement || !this.spellPlacementTarget) {
       return null
     }
-    const caster = this.tokens.find((token) => token.id === this.spellPlacement?.casterTokenId)
-    const preset = findSpellAreaPreset(this.spellPlacement.presetId)
-    if (!caster || !preset) {
+    const placement = this.spellPlacement
+    const preset = findSpellAreaPreset(placement.presetId)
+    if (!preset) {
       return null
     }
-    const target = this.clampSpellTarget(preset, caster.position, this.spellPlacementTarget)
-    const position = preset.origin === 'caster' ? caster.position : target
+    const caster =
+      placement.kind === 'caster'
+        ? this.tokens.find((token) => token.id === placement.casterTokenId)
+        : undefined
+    if (placement.kind === 'caster' && !caster) {
+      return null
+    }
+    const target = caster
+      ? this.clampSpellTarget(preset, caster.position, this.spellPlacementTarget)
+      : this.spellPlacementTarget
+    const position = caster && preset.origin === 'caster' ? caster.position : target
     const effect: PlacedSpellEffect = {
       id: 'spell-preview',
       mapId: this.map.id,
       levelId: this.currentLevelId,
-      casterTokenId: caster.id,
+      ...(caster ? { casterTokenId: caster.id } : {}),
       presetId: preset.id,
       name: preset.name,
       shape: preset.shape,
@@ -582,7 +653,8 @@ export class MapEngine {
       heightFeet: preset.heightFeet,
       duration: preset.duration,
       color: preset.color,
-      attachedToCaster: preset.origin === 'caster' && preset.shape === 'emanation',
+      attachedToCaster:
+        Boolean(caster) && preset.origin === 'caster' && preset.shape === 'emanation',
     }
     return { effect }
   }
@@ -592,6 +664,7 @@ export class MapEngine {
       if (this.currentVisiblePolygons.length > 0) {
         this.currentVisiblePolygons = []
       }
+      this.currentVisibilityFields = []
       this.renderFog()
       return
     }
@@ -602,20 +675,21 @@ export class MapEngine {
       return
     }
     this.cachedVisibilityInputKey = inputKey
-    this.currentVisiblePolygons = combineVisibilityPolygonsWithPreparedGeometry(
+    this.currentVisibilityFields = combineVisibilityFieldsWithPreparedGeometry(
       activeTokens,
       this.map,
       this.visibilityGeometryForCurrentMap(),
       this.fogLightSourcesForCurrentMap(),
       this.currentLevelId,
     )
+    this.currentVisiblePolygons = this.currentVisibilityFields.map((field) => field.polygon)
 
     this.handlers.onExplore(this.map.id, this.currentLevelId, this.currentVisiblePolygons)
     this.renderFog()
   }
 
   private visibilityGeometryForCurrentMap(): PreparedVisibilityGeometry {
-    if (!this.map) return { segments: [] }
+    if (!this.map) return { segments: [], blockers: [] }
     if (!this.preparedVisibilityGeometry) {
       this.preparedVisibilityGeometry = prepareVisibilityGeometry(
         this.map,
@@ -668,6 +742,7 @@ export class MapEngine {
       enabled: this.fogState.enabled,
       persistExploration: this.fogState.persistExploration,
       visible: this.currentVisiblePolygons,
+      visibilityFields: this.currentVisibilityFields,
       explored: this.fogState.explored,
     }
     this.fogRenderer.render(this.layers.fog, this.map, state)
@@ -758,7 +833,11 @@ export class MapEngine {
     point: GridPoint,
     pointerType: PointerEvent['pointerType'],
   ): 'resize' | 'rotate' | null {
-    if (!this.map || !this.selectedSpellEffectId) {
+    if (
+      !this.map ||
+      !this.selectedSpellEffectId ||
+      this.editingSpellEffectId !== this.selectedSpellEffectId
+    ) {
       return null
     }
     const selected = this.activeSpellEffects().find(
@@ -796,29 +875,36 @@ export class MapEngine {
       mode,
       startGrid,
       startScreen: { x: event.clientX, y: event.clientY },
+      workingEffect: effect,
+      pendingPatch: null,
     }
-    if (mode === 'pending-move') {
+    if (mode === 'pending-long-press') {
       this.spellEffectLongPressTimer = window.setTimeout(() => {
-        if (this.spellEffectInteraction?.mode !== 'pending-move') {
+        if (this.spellEffectInteraction?.mode !== 'pending-long-press') {
           return
         }
-        this.spellEffectInteraction = { ...this.spellEffectInteraction, mode: 'move' }
+        if (this.tokenRenderer.isPointerActive) {
+          this.spellEffectInteraction = { ...this.spellEffectInteraction, mode: 'blocked' }
+          this.spellEffectLongPressTimer = null
+          return
+        }
+        this.spellEffectInteraction = { ...this.spellEffectInteraction, mode: 'move-ready' }
         this.spellEffectLongPressTimer = null
-        this.host.classList.add('spell-effect-moving')
-        this.handlers.onSpellEffectDragStateChange(true)
+        this.setSpellEffectEditing(effect.id)
+        this.renderSpellEffects()
       }, 520)
+    } else {
+      this.renderSpellEffects()
     }
   }
 
-  private updateLocalSpellEffect(effectId: string, patch: SpellEffectPatch): void {
-    this.spellEffects = this.spellEffects.map((effect) =>
-      effect.id === effectId ? { ...effect, ...patch } : effect,
-    )
-    this.renderSpellEffects()
-    this.handlers.onSpellEffectUpdate(effectId, patch)
+  private setSpellEffectEditing(effectId: string | null): void {
+    if (this.editingSpellEffectId === effectId) return
+    this.editingSpellEffectId = effectId
+    this.handlers.onSpellEffectEditStateChange(effectId)
   }
 
-  private resizeSpellEffect(effect: PlacedSpellEffect, point: GridPoint): void {
+  private resizeSpellEffect(effect: PlacedSpellEffect, point: GridPoint): SpellEffectPatch {
     const local = worldPointToEffectLocal(point, effect)
     let size: number
     switch (effect.shape) {
@@ -840,22 +926,81 @@ export class MapEngine {
     }
     size = Math.max(0.5, size)
     const widthRatio = effect.width / Math.max(effect.size, 0.5)
-    this.updateLocalSpellEffect(effect.id, {
+    return {
       size,
       width:
         effect.shape === 'line' || effect.shape === 'wall'
           ? Math.max(0.25, size * widthRatio)
           : effect.width,
-    })
+    }
   }
 
-  private rotateSpellEffect(effect: PlacedSpellEffect, point: GridPoint): void {
+  private rotateSpellEffect(effect: PlacedSpellEffect, point: GridPoint): SpellEffectPatch {
     const handles = spellEffectLocalHandles(effect)
     const handleAngle = Math.atan2(handles.rotate.y, handles.rotate.x)
     const pointerAngle = Math.atan2(point.y - effect.position.y, point.x - effect.position.x)
-    this.updateLocalSpellEffect(effect.id, {
+    return {
       rotation: ((pointerAngle - handleAngle) * 180) / Math.PI,
+    }
+  }
+
+  private scheduleSpellEffectUpdate(point: GridPoint): void {
+    this.pendingSpellEffectPoint = point
+    if (this.spellEffectFrame !== null) return
+    this.spellEffectFrame = window.requestAnimationFrame(() => {
+      this.spellEffectFrame = null
+      const pending = this.pendingSpellEffectPoint
+      this.pendingSpellEffectPoint = null
+      if (pending) this.applySpellEffectUpdate(pending)
     })
+  }
+
+  private flushSpellEffectUpdate(point?: GridPoint): void {
+    if (this.spellEffectFrame !== null) {
+      window.cancelAnimationFrame(this.spellEffectFrame)
+      this.spellEffectFrame = null
+    }
+    const pending = point ?? this.pendingSpellEffectPoint
+    this.pendingSpellEffectPoint = null
+    if (pending) this.applySpellEffectUpdate(pending)
+  }
+
+  private applySpellEffectUpdate(point: GridPoint): void {
+    const interaction = this.spellEffectInteraction
+    if (!interaction) return
+    let patch: SpellEffectPatch | null = null
+    if (interaction.mode === 'move') {
+      patch = {
+        position: {
+          x: interaction.effect.position.x + point.x - interaction.startGrid.x,
+          y: interaction.effect.position.y + point.y - interaction.startGrid.y,
+        },
+      }
+    } else if (interaction.mode === 'resize') {
+      patch = this.resizeSpellEffect(interaction.effect, point)
+    } else if (interaction.mode === 'rotate') {
+      patch = this.rotateSpellEffect(interaction.effect, point)
+    }
+    if (!patch) return
+    const changed =
+      (patch.position !== undefined &&
+        (patch.position.x !== interaction.effect.position.x ||
+          patch.position.y !== interaction.effect.position.y)) ||
+      (patch.rotation !== undefined && patch.rotation !== interaction.effect.rotation) ||
+      (patch.size !== undefined && patch.size !== interaction.effect.size) ||
+      (patch.width !== undefined && patch.width !== interaction.effect.width)
+    if (!changed) {
+      interaction.pendingPatch = null
+      interaction.workingEffect = interaction.effect
+    } else {
+      interaction.pendingPatch = patch
+      interaction.workingEffect = { ...interaction.effect, ...patch }
+    }
+    if (interaction.mode === 'move' && patch.position && this.map) {
+      this.spellEffectRenderer.moveEffect(interaction.effect.id, patch.position, this.map.gridSize)
+      return
+    }
+    this.renderSpellEffects()
   }
 
   private clearSpellEffectLongPressTimer(): void {
@@ -871,6 +1016,9 @@ export class MapEngine {
       return false
     }
     this.clearSpellEffectLongPressTimer()
+    const point = this.clientToGridPoint(event.clientX, event.clientY, false)
+    if (point) this.flushSpellEffectUpdate(point)
+    else this.flushSpellEffectUpdate()
     if (interaction.mode === 'move') {
       const bounds = this.host.getBoundingClientRect()
       const droppedOnTrash =
@@ -879,12 +1027,30 @@ export class MapEngine {
         event.clientY >= bounds.bottom - 118 &&
         event.clientY <= bounds.bottom
       if (droppedOnTrash) {
+        this.spellEffects = this.spellEffects.filter(
+          (effect) => effect.id !== interaction.effect.id,
+        )
         this.handlers.onSpellEffectDelete(interaction.effect.id)
+      } else if (interaction.pendingPatch) {
+        this.spellEffects = this.spellEffects.map((effect) =>
+          effect.id === interaction.effect.id ? interaction.workingEffect : effect,
+        )
+        this.handlers.onSpellEffectUpdate(interaction.effect.id, interaction.pendingPatch)
       }
       this.host.classList.remove('spell-effect-moving')
       this.handlers.onSpellEffectDragStateChange(false)
+      this.setSpellEffectEditing(null)
+    } else if (
+      (interaction.mode === 'resize' || interaction.mode === 'rotate') &&
+      interaction.pendingPatch
+    ) {
+      this.spellEffects = this.spellEffects.map((effect) =>
+        effect.id === interaction.effect.id ? interaction.workingEffect : effect,
+      )
+      this.handlers.onSpellEffectUpdate(interaction.effect.id, interaction.pendingPatch)
     }
     this.spellEffectInteraction = null
+    this.renderSpellEffects()
     return true
   }
 
@@ -971,15 +1137,28 @@ export class MapEngine {
       }
       if (event.button === 0) {
         const target = this.clientToGridPoint(event.clientX, event.clientY, false)
-        const caster = this.tokens.find((token) => token.id === this.spellPlacement?.casterTokenId)
-        const preset = findSpellAreaPreset(this.spellPlacement.presetId)
-        if (target && caster && preset) {
+        const placement = this.spellPlacement
+        const preset = findSpellAreaPreset(placement.presetId)
+        const caster =
+          placement.kind === 'caster'
+            ? this.tokens.find((token) => token.id === placement.casterTokenId)
+            : undefined
+        if (target && preset && (placement.kind === 'free' || caster)) {
           event.preventDefault()
-          const accepted = this.clampSpellTarget(preset, caster.position, target)
-          this.handlers.onSpellPlace(caster.id, preset.id, accepted)
+          const accepted = caster ? this.clampSpellTarget(preset, caster.position, target) : target
+          this.handlers.onSpellPlace(placement, accepted)
         }
         return
       }
+    }
+    if (
+      event.pointerType === 'touch' &&
+      this.spellEffectInteraction &&
+      this.tokenRenderer.isPointerActiveFor(event.pointerId)
+    ) {
+      this.capturePointer(event.pointerId)
+      event.preventDefault()
+      return
     }
     if (event.pointerType === 'touch' && this.spellEffectInteraction) {
       event.preventDefault()
@@ -1017,6 +1196,15 @@ export class MapEngine {
         }
 
         if (this.tokenRenderer.isPointerActive) {
+          if (event.pointerType === 'touch') {
+            const bounds = this.host.getBoundingClientRect()
+            this.clearMapLongPress()
+            this.touchCameraGesture.add(
+              event.pointerId,
+              clientToLocal({ x: event.clientX, y: event.clientY }, bounds),
+            )
+            this.capturePointer(event.pointerId)
+          }
           event.preventDefault()
           return
         }
@@ -1028,18 +1216,28 @@ export class MapEngine {
           this.tokenRenderer.cancelPointerInteraction()
           this.selectedSpellEffectId = hitEffect.id
           this.handlers.onSpellEffectSelect(hitEffect.id)
+          if (this.editingSpellEffectId && this.editingSpellEffectId !== hitEffect.id) {
+            this.setSpellEffectEditing(null)
+          }
           this.renderSpellEffects()
-          this.beginSpellEffectInteraction(event, hitEffect, 'pending-move', point)
+          this.beginSpellEffectInteraction(event, hitEffect, 'pending-long-press', point)
           return
         }
       }
     }
     if (event.pointerType === 'touch' && event.button === 0 && this.map) {
       const bounds = this.host.getBoundingClientRect()
-      this.touchCameraGesture.add(
-        event.pointerId,
-        clientToLocal({ x: event.clientX, y: event.clientY }, bounds),
-      )
+      const local = clientToLocal({ x: event.clientX, y: event.clientY }, bounds)
+      const position = this.clientToGridPoint(event.clientX, event.clientY, false)
+      if (this.touchCameraGesture.size > 0) {
+        this.clearMapLongPress()
+      }
+      this.touchCameraGesture.add(event.pointerId, local)
+      if (this.touchCameraGesture.size === 1 && position) {
+        this.beginMapLongPress(event.pointerId, local, position)
+      } else {
+        this.clearMapLongPress()
+      }
       this.capturePointer(event.pointerId)
       event.preventDefault()
       return
@@ -1068,39 +1266,40 @@ export class MapEngine {
       if (!point) {
         return
       }
-      if (interaction.mode === 'pending-move') {
+      if (interaction.mode === 'pending-long-press') {
         const distance = Math.hypot(
           event.clientX - interaction.startScreen.x,
           event.clientY - interaction.startScreen.y,
         )
         if (distance > 7) {
           this.clearSpellEffectLongPressTimer()
-          interaction = { ...interaction, mode: 'move' }
+          interaction = { ...interaction, mode: 'blocked' }
           this.spellEffectInteraction = interaction
-          this.host.classList.add('spell-effect-moving')
-          this.handlers.onSpellEffectDragStateChange(true)
-        } else {
+        }
+        event.preventDefault()
+        return
+      }
+      if (interaction.mode === 'blocked') {
+        event.preventDefault()
+        return
+      }
+      if (interaction.mode === 'move-ready') {
+        const distance = Math.hypot(
+          event.clientX - interaction.startScreen.x,
+          event.clientY - interaction.startScreen.y,
+        )
+        if (distance <= 7) {
           event.preventDefault()
           return
         }
+        interaction = { ...interaction, mode: 'move' }
+        this.spellEffectInteraction = interaction
+        this.host.classList.add('spell-effect-moving')
+        this.handlers.onSpellEffectDragStateChange(true)
+        this.renderSpellEffects()
       }
-      if (interaction.mode === 'move') {
-        this.updateLocalSpellEffect(interaction.effect.id, {
-          position: {
-            x: interaction.effect.position.x + point.x - interaction.startGrid.x,
-            y: interaction.effect.position.y + point.y - interaction.startGrid.y,
-          },
-        })
-      } else if (interaction.mode === 'resize') {
-        this.resizeSpellEffect(interaction.effect, point)
-      } else {
-        this.rotateSpellEffect(interaction.effect, point)
-      }
+      this.scheduleSpellEffectUpdate(point)
       event.preventDefault()
-      return
-    }
-    if (this.spellEffectInteraction) {
-      if (event.pointerType === 'touch') event.preventDefault()
       return
     }
     if (this.map) {
@@ -1114,13 +1313,24 @@ export class MapEngine {
         return
       }
     }
+    if (this.spellEffectInteraction) {
+      if (event.pointerType === 'touch') event.preventDefault()
+      return
+    }
 
     if (this.touchCameraGesture.has(event.pointerId)) {
       const bounds = this.host.getBoundingClientRect()
-      this.touchCameraGesture.move(
-        event.pointerId,
-        clientToLocal({ x: event.clientX, y: event.clientY }, bounds),
-      )
+      const local = clientToLocal({ x: event.clientX, y: event.clientY }, bounds)
+      if (
+        this.mapLongPress?.pointerId === event.pointerId &&
+        Math.hypot(
+          local.x - this.mapLongPress.startScreen.x,
+          local.y - this.mapLongPress.startScreen.y,
+        ) > 7
+      ) {
+        this.clearMapLongPress(event.pointerId)
+      }
+      this.touchCameraGesture.move(event.pointerId, local)
       this.scheduleTouchCameraUpdate()
       event.preventDefault()
       return
@@ -1143,6 +1353,7 @@ export class MapEngine {
   }
 
   private readonly handlePointerUp = (event: PointerEvent): void => {
+    this.clearMapLongPress(event.pointerId)
     if (this.finishSpellEffectInteraction(event)) {
       this.releasePointer(event.pointerId)
       event.preventDefault()
@@ -1197,10 +1408,13 @@ export class MapEngine {
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     if (event.code === 'Escape' && this.spellEffectInteraction) {
-      this.clearSpellEffectLongPressTimer()
-      this.spellEffectInteraction = null
-      this.host.classList.remove('spell-effect-moving')
-      this.handlers.onSpellEffectDragStateChange(false)
+      this.cancelSpellEffectInteraction()
+      this.setSpellEffectEditing(null)
+      this.renderSpellEffects()
+      return
+    }
+    if (event.code === 'Escape' && this.editingSpellEffectId) {
+      this.finishSpellEffectEditing()
       return
     }
     if (event.code === 'Escape' && this.spellPlacement) {
@@ -1286,6 +1500,44 @@ export class MapEngine {
     this.tokenRenderer.cancelPointerInteraction()
   }
 
+  private beginMapLongPress(pointerId: number, screenPoint: PixelPoint, position: GridPoint): void {
+    this.clearMapLongPress()
+    const state: MapLongPressState = {
+      pointerId,
+      startScreen: screenPoint,
+      position,
+      timer: null,
+    }
+    state.timer = window.setTimeout(() => {
+      if (
+        this.mapLongPress !== state ||
+        this.touchCameraGesture.size !== 1 ||
+        !this.touchCameraGesture.has(pointerId) ||
+        this.tokenRenderer.isPointerActive ||
+        this.spellEffectInteraction ||
+        this.spellPlacement
+      ) {
+        if (this.mapLongPress === state) this.mapLongPress = null
+        return
+      }
+      this.mapLongPress = null
+      this.touchCameraGesture.remove(pointerId)
+      this.cancelTouchCameraFrame()
+      this.handlers.onMapLongPress(position, screenPoint)
+    }, 520)
+    this.mapLongPress = state
+  }
+
+  private clearMapLongPress(pointerId?: number): boolean {
+    const state = this.mapLongPress
+    if (!state || (pointerId !== undefined && state.pointerId !== pointerId)) {
+      return false
+    }
+    if (state.timer !== null) window.clearTimeout(state.timer)
+    this.mapLongPress = null
+    return true
+  }
+
   private scheduleTouchCameraUpdate(): void {
     if (this.touchCameraFrame !== null) return
     this.touchCameraFrame = window.requestAnimationFrame(() => {
@@ -1323,7 +1575,7 @@ export class MapEngine {
   }
 
   private cancelPointerInteraction(pointerId: number): boolean {
-    let cancelled = false
+    let cancelled = this.clearMapLongPress(pointerId)
     if (this.tokenRenderer.isPointerActiveFor(pointerId)) {
       this.tokenDragQueue.cancel(pointerId)
       this.tokenRenderer.cancelPointerInteraction(pointerId)
@@ -1365,16 +1617,26 @@ export class MapEngine {
       return false
     }
     this.clearSpellEffectLongPressTimer()
+    if (this.spellEffectFrame !== null) {
+      window.cancelAnimationFrame(this.spellEffectFrame)
+      this.spellEffectFrame = null
+    }
+    this.pendingSpellEffectPoint = null
+    const wasMoving = this.spellEffectInteraction.mode === 'move'
     this.spellEffectInteraction = null
     this.host.classList.remove('spell-effect-moving')
-    this.handlers.onSpellEffectDragStateChange(false)
+    if (wasMoving) this.handlers.onSpellEffectDragStateChange(false)
+    this.setSpellEffectEditing(null)
+    this.renderSpellEffects()
     return true
   }
 
   private cancelMapPointerInteractions(): void {
+    this.clearMapLongPress()
     this.cancelTokenInteractions()
     this.cancelTouchCameraGesture()
     this.cancelSpellEffectInteraction()
+    this.setSpellEffectEditing(null)
     this.panState = null
     this.releaseAllPointers()
   }
@@ -1404,7 +1666,7 @@ export class MapEngine {
   }
 
   private releaseAllPointers(): void {
-    for (const pointerId of [...this.capturedPointerIds]) {
+    for (const pointerId of this.capturedPointerIds) {
       this.releasePointer(pointerId)
     }
   }

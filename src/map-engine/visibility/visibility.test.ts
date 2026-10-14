@@ -5,12 +5,15 @@ import {
   combineVisibilityPolygons,
   combineVisibilityPolygonsWithLights,
   combineVisibilityPolygonsWithPreparedGeometry,
+  combineVisibilityFieldsWithPreparedGeometry,
+  combineVisibleBlockers,
   computeVisibilityPolygon,
   doorVisibilitySegments,
   polygonContainsPoint,
   prepareVisibilityGeometry,
   raySegmentIntersection,
   visibilitySegmentsForMap,
+  visibilityBlockersNear,
   visibilitySegmentsNear,
   visibilityTokenStateKey,
 } from './visibility'
@@ -87,6 +90,18 @@ describe('Sichtberechnung', () => {
     expect(polygons.every((polygon) => polygon.length > 8)).toBe(true)
   })
 
+  it('berücksichtigt neue Spieler, aber keine Gegner ohne aktivierte Sicht', () => {
+    const player = { ...token('player', 2, 2), visionRange: 8, category: 'player' as const }
+    const monster = {
+      ...token('monster', 8, 8),
+      visionRange: 0,
+      visionEnabled: false,
+      category: 'monster' as const,
+    }
+
+    expect(combineVisibilityPolygons([player, monster], baseMap, { door: 'open' })).toHaveLength(1)
+  })
+
   it('nimmt geschlossene Türen in die Kartensegmente auf', () => {
     const closed = visibilitySegmentsForMap(baseMap, { door: 'closed' })
     const open = visibilitySegmentsForMap(baseMap, { door: 'open' })
@@ -106,6 +121,218 @@ describe('Sichtberechnung', () => {
       [],
     )
     expect(prepared).toEqual(direct)
+  })
+
+  it('liefert Reichweitenmetadaten getrennt von den Sichtpolygonen', () => {
+    const visibleToken = { ...token('a', 2, 5), visionRange: 8 }
+    const fields = combineVisibilityFieldsWithPreparedGeometry(
+      [visibleToken],
+      baseMap,
+      prepareVisibilityGeometry(baseMap, { door: 'closed' }),
+      [],
+    )
+
+    expect(fields).toHaveLength(1)
+    expect(fields[0]?.rangeBoundary).toEqual({ origin: visibleToken.position, range: 8 })
+    expect(Math.max(...fields[0]!.polygon.map((point) => point.x))).toBeLessThanOrEqual(5.001)
+  })
+
+  it('behält geschlossene Türen im Feld hart und öffnet die Sicht nach dem Öffnen', () => {
+    const doorOnlyMap: MapDefinition = { ...baseMap, walls: [] }
+    const visibleToken = { ...token('a', 2, 5), visionRange: 8 }
+    const closedFields = combineVisibilityFieldsWithPreparedGeometry(
+      [visibleToken],
+      doorOnlyMap,
+      prepareVisibilityGeometry(doorOnlyMap, { door: 'closed' }),
+      [],
+    )
+    const openFields = combineVisibilityFieldsWithPreparedGeometry(
+      [visibleToken],
+      doorOnlyMap,
+      prepareVisibilityGeometry(doorOnlyMap, { door: 'open' }),
+      [],
+    )
+
+    expect(polygonContainsPoint(closedFields[0]!.polygon, { x: 7, y: 5 })).toBe(false)
+    expect(polygonContainsPoint(openFields[0]!.polygon, { x: 7, y: 5 })).toBe(true)
+    expect(closedFields[0]?.rangeBoundary).toEqual(openFields[0]?.rangeBoundary)
+  })
+
+  it('markiert nur den tatsächlich getroffenen Teil einer Wand vor dem Token', () => {
+    const visibleToken = { ...token('left', 2, 5), visionRange: 8 }
+    const fields = combineVisibilityFieldsWithPreparedGeometry(
+      [visibleToken],
+      baseMap,
+      prepareVisibilityGeometry(baseMap, { door: 'open' }),
+      [],
+    )
+    const blockers = combineVisibleBlockers(fields)
+
+    expect(blockers).toHaveLength(1)
+    expect(blockers[0]?.blockerId).toBe('wall:wall')
+    expect(blockers[0]?.kind).toBe('wall')
+    expect(blockers[0]?.visibleSegment.a.x).toBeCloseTo(5)
+    expect(blockers[0]?.visibleSegment.b.x).toBeCloseTo(5)
+    expect(blockers[0]!.visibleSegment.a.y).toBeLessThan(0.01)
+    expect(blockers[0]!.visibleSegment.b.y).toBeGreaterThan(9.99)
+  })
+
+  it('zeigt dieselbe Wand auch von ihrer anderen sichtbaren Seite', () => {
+    const visibleToken = { ...token('right', 8, 5), visionRange: 8 }
+    const fields = combineVisibilityFieldsWithPreparedGeometry(
+      [visibleToken],
+      baseMap,
+      prepareVisibilityGeometry(baseMap, { door: 'open' }),
+      [],
+    )
+
+    expect(combineVisibleBlockers(fields).map((blocker) => blocker.blockerId)).toEqual([
+      'wall:wall',
+    ])
+  })
+
+  it('hebt nur geschlossene sichtblockierende Türen hervor', () => {
+    const doorOnlyMap: MapDefinition = { ...baseMap, walls: [] }
+    const visibleToken = { ...token('left', 2, 5), visionRange: 8 }
+    const fieldsFor = (state: 'closed' | 'open') =>
+      combineVisibilityFieldsWithPreparedGeometry(
+        [visibleToken],
+        doorOnlyMap,
+        prepareVisibilityGeometry(doorOnlyMap, { door: state }),
+        [],
+      )
+
+    expect(combineVisibleBlockers(fieldsFor('closed')).map((blocker) => blocker.blockerId)).toEqual(
+      ['door:door'],
+    )
+    expect(combineVisibleBlockers(fieldsFor('open'))).toEqual([])
+  })
+
+  it('markiert weder Wände außerhalb der Reichweite noch nicht sichtblockierende Wände', () => {
+    const mapWithWalls: MapDefinition = {
+      ...baseMap,
+      walls: [
+        {
+          id: 'outside',
+          a: { x: 6.05, y: 0 },
+          b: { x: 6.05, y: 10 },
+          blocksSight: true,
+          blocksMovement: true,
+        },
+        {
+          id: 'transparent',
+          a: { x: 4, y: 0 },
+          b: { x: 4, y: 10 },
+          blocksSight: false,
+          blocksMovement: true,
+        },
+      ],
+      doors: [],
+    }
+    const fields = combineVisibilityFieldsWithPreparedGeometry(
+      [token('short', 2, 5)],
+      mapWithWalls,
+      prepareVisibilityGeometry(mapWithWalls, {}),
+      [],
+    )
+
+    expect(combineVisibleBlockers(fields)).toEqual([])
+  })
+
+  it('vereinigt überlappende Sichtfelder ohne doppelte Wandkonturen', () => {
+    const visibleTokens = [
+      { ...token('first', 2, 4), visionRange: 8 },
+      { ...token('second', 2, 6), visionRange: 8 },
+    ]
+    const fields = combineVisibilityFieldsWithPreparedGeometry(
+      visibleTokens,
+      baseMap,
+      prepareVisibilityGeometry(baseMap, { door: 'open' }),
+      [],
+    )
+
+    expect(combineVisibleBlockers(fields).map((blocker) => blocker.blockerId)).toEqual([
+      'wall:wall',
+    ])
+  })
+
+  it('berücksichtigt für Blockerkonturen ausschließlich die aktuelle Ebene', () => {
+    const layeredMap: MapDefinition = {
+      ...baseMap,
+      levels: [
+        { id: 'ground', name: 'Unten' },
+        { id: 'upper', name: 'Oben' },
+      ],
+      defaultLevelId: 'ground',
+      walls: [
+        {
+          id: 'ground-wall',
+          levelId: 'ground',
+          a: { x: 5, y: 0 },
+          b: { x: 5, y: 10 },
+          blocksSight: true,
+          blocksMovement: true,
+        },
+        {
+          id: 'upper-wall',
+          levelId: 'upper',
+          a: { x: 6, y: 0 },
+          b: { x: 6, y: 10 },
+          blocksSight: true,
+          blocksMovement: true,
+        },
+      ],
+      doors: [],
+    }
+    const groundFields = combineVisibilityFieldsWithPreparedGeometry(
+      [{ ...token('ground-token', 2, 5), visionRange: 8, levelId: 'ground' }],
+      layeredMap,
+      prepareVisibilityGeometry(layeredMap, {}, 'ground'),
+      [],
+      'ground',
+    )
+    const upperFields = combineVisibilityFieldsWithPreparedGeometry(
+      [{ ...token('upper-token', 2, 5), visionRange: 8, levelId: 'upper' }],
+      layeredMap,
+      prepareVisibilityGeometry(layeredMap, {}, 'upper'),
+      [],
+      'upper',
+    )
+
+    expect(combineVisibleBlockers(groundFields)[0]?.blockerId).toBe('wall:ground-wall')
+    expect(combineVisibleBlockers(upperFields)[0]?.blockerId).toBe('wall:upper-wall')
+  })
+
+  it('reduziert auch auf großen Karten die Konturprüfung auf nahe Blocker', () => {
+    const farWalls = Array.from({ length: 2_000 }, (_value, index) => ({
+      id: `far-${index}`,
+      a: { x: 50 + index, y: 0 },
+      b: { x: 50 + index, y: 20 },
+      blocksSight: true,
+      blocksMovement: true,
+    }))
+    const largeMap: MapDefinition = {
+      ...baseMap,
+      width: 2_100,
+      walls: [
+        {
+          id: 'near',
+          a: { x: 4, y: 0 },
+          b: { x: 4, y: 10 },
+          blocksSight: true,
+          blocksMovement: true,
+        },
+        ...farWalls,
+      ],
+      doors: [],
+    }
+    const geometry = prepareVisibilityGeometry(largeMap, {})
+    const nearby = visibilityBlockersNear(geometry.blockers, { x: 2, y: 5 }, 4)
+
+    expect(geometry.blockers.length).toBe(2_005)
+    expect(
+      nearby.filter((blocker) => blocker.kind === 'wall').map((blocker) => blocker.id),
+    ).toEqual(['wall:near'])
   })
 
   it('ändert den Sichtschlüssel nur bei sichtrelevanten Token-Daten', () => {
@@ -154,6 +381,50 @@ describe('Sichtberechnung', () => {
     ])
     expect(polygons).toHaveLength(2)
     expect(polygons.some((polygon) => polygonContainsPoint(polygon, { x: 8.5, y: 5 }))).toBe(true)
+  })
+
+  it('kennzeichnet radiale Lichter weich und Tageslichtbereiche als harte Felder', () => {
+    const openMap: MapDefinition = { ...baseMap, walls: [], doors: [] }
+    const visibleToken = { ...token('outside', 7, 7), visionRange: 4 }
+    const fields = combineVisibilityFieldsWithPreparedGeometry(
+      [visibleToken],
+      openMap,
+      prepareVisibilityGeometry(openMap, {}),
+      [
+        { id: 'torch', position: { x: 5, y: 7 }, range: 3 },
+        { kind: 'daylight-area', id: 'sun', bounds: { x: 6, y: 6, width: 3, height: 3 } },
+      ],
+    )
+
+    expect(fields.some((field) => field.rangeBoundary?.range === 3)).toBe(true)
+    expect(fields.some((field) => field.rangeBoundary === undefined)).toBe(true)
+  })
+
+  it('liefert auch für aktivierte Lichtfelder nur deren getroffene Wandkontur', () => {
+    const lightMap: MapDefinition = {
+      ...baseMap,
+      walls: [
+        {
+          id: 'wall-behind-token-range',
+          a: { x: 7, y: 0 },
+          b: { x: 7, y: 10 },
+          blocksSight: true,
+          blocksMovement: true,
+        },
+      ],
+      doors: [],
+    }
+    const fields = combineVisibilityFieldsWithPreparedGeometry(
+      [token('a', 2, 5)],
+      lightMap,
+      prepareVisibilityGeometry(lightMap, {}),
+      [{ id: 'torch', position: { x: 5, y: 5 }, range: 4 }],
+    )
+
+    expect(fields).toHaveLength(2)
+    expect(combineVisibleBlockers(fields).map((blocker) => blocker.blockerId)).toEqual([
+      'wall:wall-behind-token-range',
+    ])
   })
 
   it('aktiviert Lichtquellen nicht durch Wände hindurch', () => {

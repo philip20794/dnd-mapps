@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MapDefinition } from '@/maps/api'
 import type { PlacedSpellEffect } from '@/types/spells'
 import type { PlacedToken } from '@/types/tokens'
@@ -57,12 +57,14 @@ function handlers() {
     onTokenSelect: vi.fn<MapEngineHandlers['onTokenSelect']>(),
     onTokenMove: vi.fn<MapEngineHandlers['onTokenMove']>(),
     onTokenLongPress: vi.fn<MapEngineHandlers['onTokenLongPress']>(),
+    onMapLongPress: vi.fn<MapEngineHandlers['onMapLongPress']>(),
     onSpellPlace: vi.fn<MapEngineHandlers['onSpellPlace']>(),
     onSpellPlacementCancel: vi.fn<MapEngineHandlers['onSpellPlacementCancel']>(),
     onSpellEffectSelect: vi.fn<MapEngineHandlers['onSpellEffectSelect']>(),
     onSpellEffectUpdate: vi.fn<MapEngineHandlers['onSpellEffectUpdate']>(),
     onSpellEffectDelete: vi.fn<MapEngineHandlers['onSpellEffectDelete']>(),
     onSpellEffectDragStateChange: vi.fn<MapEngineHandlers['onSpellEffectDragStateChange']>(),
+    onSpellEffectEditStateChange: vi.fn<MapEngineHandlers['onSpellEffectEditStateChange']>(),
     onDoorToggle: vi.fn<MapEngineHandlers['onDoorToggle']>(),
     onLevelTransition: vi.fn<MapEngineHandlers['onLevelTransition']>(),
     onCameraChange: vi.fn<MapEngineHandlers['onCameraChange']>(),
@@ -89,7 +91,12 @@ function pointerEvent(
 
 function invokePointerHandler(
   engine: MapEngine,
-  name: 'handlePointerDown' | 'handlePointerMove' | 'handlePointerUp' | 'handlePointerCancel',
+  name:
+    | 'handlePointerDown'
+    | 'handlePointerMove'
+    | 'handlePointerUp'
+    | 'handlePointerCancel'
+    | 'handleLostPointerCapture',
   event: PointerEvent,
 ): void {
   const handler = Reflect.get(engine, name) as (event: PointerEvent) => void
@@ -97,6 +104,8 @@ function invokePointerHandler(
 }
 
 describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
+  afterEach(() => vi.useRealTimers())
+
   beforeEach(() => {
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -149,7 +158,28 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
     engine.destroy()
   })
 
-  it('startet den direkten Spell-Drag nach Überschreiten der Bewegungsschwelle', () => {
+  it('leitet einen unbewegten Token-Long-Press exklusiv an das Kontextmenü weiter', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    engine.setMap(map, {})
+    engine.setTokens([token], null)
+    const layers = Reflect.get(engine, 'layers') as { readonly tokens: Container }
+
+    layers.tokens.children[0]?.emit('pointerdown', {
+      pointerId: 18,
+      global: { x: 240, y: 240 },
+      stopPropagation: () => undefined,
+    } as FederatedPointerEvent)
+    vi.advanceTimersByTime(520)
+
+    expect(callbacks.onTokenLongPress).toHaveBeenCalledWith(token.id, { x: 240, y: 240 })
+    expect((Reflect.get(engine, 'tokenRenderer') as TokenRenderer).isPointerActiveFor(18)).toBe(false)
+    engine.destroy()
+    vi.useRealTimers()
+  })
+
+  it('lässt eine fixierte Form durch gewöhnliches Ziehen unverändert', () => {
     const callbacks = handlers()
     const engine = new MapEngine(document.createElement('div'), callbacks)
     const sphere = effect('sphere')
@@ -157,18 +187,57 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
     engine.setSpellEffects([sphere], null)
 
     invokePointerHandler(engine, 'handlePointerDown', pointerEvent(7, 240, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(7, 252, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(7, 252, 240, 'touch'))
+
+    expect(callbacks.onSpellEffectSelect).toHaveBeenCalledWith(sphere.id)
+    expect(callbacks.onSpellEffectDragStateChange).not.toHaveBeenCalled()
+    expect(callbacks.onSpellEffectUpdate).not.toHaveBeenCalled()
+    engine.destroy()
+  })
+
+  it('wählt eine fixierte Form per Tap nur aus', () => {
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    const sphere = effect('sphere')
+    engine.setMap(map, {})
+    engine.setSpellEffects([sphere], null)
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(9, 240, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(9, 240, 240, 'touch'))
+
+    expect(callbacks.onSpellEffectSelect).toHaveBeenCalledWith(sphere.id)
+    expect(callbacks.onSpellEffectUpdate).not.toHaveBeenCalled()
+    expect(callbacks.onSpellEffectEditStateChange).not.toHaveBeenCalled()
+    expect(Reflect.get(engine, 'spellEffectInteraction')).toBeNull()
+    engine.destroy()
+  })
+
+  it('verschiebt eine Form erst nach Long Press und committet nur beim Loslassen', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    const sphere = effect('sphere')
+    engine.setMap(map, {})
+    engine.setSpellEffects([sphere], null)
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(8, 240, 240, 'touch'))
+    vi.advanceTimersByTime(520)
+    expect(callbacks.onSpellEffectEditStateChange).toHaveBeenCalledWith(sphere.id)
+
     invokePointerHandler(engine, 'handlePointerMove', pointerEvent(8, 252, 240, 'touch'))
+    Reflect.get(engine, 'flushSpellEffectUpdate').call(engine)
+    expect(callbacks.onSpellEffectDragStateChange).toHaveBeenCalledWith(true)
     expect(callbacks.onSpellEffectUpdate).not.toHaveBeenCalled()
 
-    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(7, 252, 240, 'touch'))
-
-    expect(callbacks.onSpellEffectDragStateChange).toHaveBeenCalledWith(true)
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(8, 252, 240, 'touch'))
     expect(callbacks.onSpellEffectUpdate).toHaveBeenCalledWith(sphere.id, {
       position: { x: 4.25, y: 4 },
     })
-    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(7, 252, 240, 'touch'))
     expect(callbacks.onSpellEffectDragStateChange).toHaveBeenLastCalledWith(false)
+    expect(callbacks.onSpellEffectEditStateChange).toHaveBeenLastCalledWith(null)
     engine.destroy()
+    vi.useRealTimers()
   })
 
   it('lässt einen zweiten Pointer den laufenden Token-Drag nicht übernehmen', () => {
@@ -245,6 +314,36 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
     engine.destroy()
   })
 
+  it('verliert Pointer Capture nur fÃ¼r die zugehÃ¶rige Token-Interaktion', () => {
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    const secondToken = { ...token, id: 'capture-rogue', position: { x: 6, y: 4 } }
+    engine.setMap(map, {})
+    engine.setTokens([token, secondToken], null)
+    const layers = Reflect.get(engine, 'layers') as { readonly tokens: Container }
+
+    layers.tokens.children[0]?.emit('pointerdown', {
+      pointerId: 24,
+      global: { x: 240, y: 240 },
+      stopPropagation: () => undefined,
+    } as FederatedPointerEvent)
+    layers.tokens.children[1]?.emit('pointerdown', {
+      pointerId: 25,
+      global: { x: 336, y: 240 },
+      stopPropagation: () => undefined,
+    } as FederatedPointerEvent)
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(24, 288, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(25, 384, 240, 'touch'))
+    invokePointerHandler(engine, 'handleLostPointerCapture', pointerEvent(24, 288, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(25, 384, 240, 'touch'))
+
+    expect(callbacks.onTokenMove).toHaveBeenCalledOnce()
+    expect(callbacks.onTokenMove).toHaveBeenCalledWith(secondToken.id, expect.anything())
+    const renderer = Reflect.get(engine, 'tokenRenderer') as TokenRenderer
+    expect(renderer.isPointerActive).toBe(false)
+    engine.destroy()
+  })
+
   it('bereinigt alle Token-Interaktionen beim Kartenwechsel', () => {
     const engine = new MapEngine(document.createElement('div'), handlers())
     engine.setMap(map, {})
@@ -310,7 +409,8 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
   })
 
   it('übernimmt einen laufenden Token-Drag nicht als Touch-Kamerageste', () => {
-    const engine = new MapEngine(document.createElement('div'), handlers())
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
     engine.setMap(map, {})
     engine.setTokens([token], null)
     const layers = Reflect.get(engine, 'layers') as { readonly tokens: Container }
@@ -325,34 +425,127 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
     invokePointerHandler(engine, 'handlePointerDown', pointerEvent(61, 100, 100, 'touch'))
 
     expect(renderer.isPointerActiveFor(60)).toBe(true)
-    expect(Reflect.get(engine, 'touchCameraGesture').size).toBe(0)
+    expect(Reflect.get(engine, 'touchCameraGesture').size).toBe(1)
+    const initialCamera = Reflect.get(engine, 'settings').camera
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(61, 112, 100, 'touch'))
+    Reflect.get(engine, 'flushTouchCameraUpdate').call(engine)
+    expect(Reflect.get(engine, 'settings').camera.x).toBe(initialCamera.x + 5)
+
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(60, 288, 240, 'touch'))
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(61, 112, 100, 'touch'))
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(60, 288, 240, 'touch'))
+    expect(callbacks.onTokenMove).toHaveBeenCalledOnce()
     invokePointerHandler(engine, 'handlePointerCancel', pointerEvent(60, 240, 240, 'touch'))
     engine.destroy()
   })
 
   it('trifft Spell-Resize-Griffe mit Touch großzügiger als mit der Maus', () => {
+    vi.useFakeTimers()
     const callbacks = handlers()
     const engine = new MapEngine(document.createElement('div'), callbacks)
     const sphere = effect('sphere')
     engine.setMap(map, {})
     engine.setSpellEffects([sphere], sphere.id)
 
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(69, 240, 240, 'touch'))
+    vi.advanceTimersByTime(520)
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(69, 240, 240, 'touch'))
+
     invokePointerHandler(engine, 'handlePointerDown', pointerEvent(70, 457, 240, 'touch'))
     expect(Reflect.get(engine, 'spellEffectInteraction')).toMatchObject({ mode: 'resize' })
     invokePointerHandler(engine, 'handlePointerMove', pointerEvent(70, 480, 240, 'touch'))
+    Reflect.get(engine, 'flushSpellEffectUpdate').call(engine)
+    expect(callbacks.onSpellEffectUpdate).not.toHaveBeenCalled()
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(70, 480, 240, 'touch'))
     expect(callbacks.onSpellEffectUpdate).toHaveBeenCalledWith(
       sphere.id,
       expect.objectContaining({ size: expect.any(Number) }),
     )
-    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(70, 480, 240, 'touch'))
 
     const mouseEngine = new MapEngine(document.createElement('div'), handlers())
     mouseEngine.setMap(map, {})
     mouseEngine.setSpellEffects([sphere], sphere.id)
+    invokePointerHandler(mouseEngine, 'handlePointerDown', pointerEvent(68, 240, 240, 'mouse'))
+    vi.advanceTimersByTime(520)
+    invokePointerHandler(mouseEngine, 'handlePointerUp', pointerEvent(68, 240, 240, 'mouse'))
     invokePointerHandler(mouseEngine, 'handlePointerDown', pointerEvent(71, 457, 240, 'mouse'))
     expect(Reflect.get(mouseEngine, 'spellEffectInteraction')).toBeNull()
     engine.destroy()
     mouseEngine.destroy()
+    vi.useRealTimers()
+  })
+
+  it('dreht nur im bewussten Bearbeitungsmodus und committet beim Loslassen', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    const sphere = effect('sphere')
+    engine.setMap(map, {})
+    engine.setSpellEffects([sphere], sphere.id)
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(73, 240, 240, 'touch'))
+    vi.advanceTimersByTime(520)
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(73, 240, 240, 'touch'))
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(74, 240, 10, 'touch'))
+    expect(Reflect.get(engine, 'spellEffectInteraction')).toMatchObject({ mode: 'rotate' })
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(74, 300, 40, 'touch'))
+    Reflect.get(engine, 'flushSpellEffectUpdate').call(engine)
+    expect(callbacks.onSpellEffectUpdate).not.toHaveBeenCalled()
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(74, 300, 40, 'touch'))
+
+    expect(callbacks.onSpellEffectUpdate).toHaveBeenCalledWith(
+      sphere.id,
+      expect.objectContaining({ rotation: expect.any(Number) }),
+    )
+    expect(Reflect.get(engine, 'editingSpellEffectId')).toBe(sphere.id)
+    engine.finishSpellEffectEditing()
+    expect(Reflect.get(engine, 'editingSpellEffectId')).toBeNull()
+    engine.destroy()
+    vi.useRealTimers()
+  })
+
+  it('verwirft lokale Spell-Änderungen bei pointercancel', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    const sphere = effect('sphere')
+    engine.setMap(map, {})
+    engine.setSpellEffects([sphere], sphere.id)
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(75, 240, 240, 'touch'))
+    vi.advanceTimersByTime(520)
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(75, 270, 240, 'touch'))
+    Reflect.get(engine, 'flushSpellEffectUpdate').call(engine)
+    invokePointerHandler(engine, 'handlePointerCancel', pointerEvent(75, 270, 240, 'touch'))
+
+    expect(callbacks.onSpellEffectUpdate).not.toHaveBeenCalled()
+    expect(callbacks.onSpellEffectDragStateChange).toHaveBeenLastCalledWith(false)
+    expect(Reflect.get(engine, 'editingSpellEffectId')).toBeNull()
+    expect(Reflect.get(engine, 'spellEffectInteraction')).toBeNull()
+    engine.destroy()
+    vi.useRealTimers()
+  })
+
+  it('beendet den Spell-Bearbeitungsmodus beim Kartenwechsel', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    const sphere = effect('sphere')
+    engine.setMap(map, {})
+    engine.setSpellEffects([sphere], sphere.id)
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(76, 240, 240, 'touch'))
+    vi.advanceTimersByTime(520)
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(76, 240, 240, 'touch'))
+    expect(Reflect.get(engine, 'editingSpellEffectId')).toBe(sphere.id)
+
+    engine.setMap({ ...map, id: 'spell-next-map' }, {})
+
+    expect(Reflect.get(engine, 'editingSpellEffectId')).toBeNull()
+    expect(callbacks.onSpellEffectEditStateChange).toHaveBeenLastCalledWith(null)
+    engine.destroy()
+    vi.useRealTimers()
   })
 
   it('gibt einem Token innerhalb einer Spell-Fläche außerhalb der Griffe Vorrang', () => {
@@ -375,6 +568,140 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
 
     expect(callbacks.onTokenMove).toHaveBeenCalledOnce()
     expect(callbacks.onSpellEffectUpdate).not.toHaveBeenCalled()
+    engine.destroy()
+  })
+
+  it('öffnet nach 520 ms auf freier Kartenfläche das Menü am ursprünglichen Punkt', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    engine.setMap(map, {})
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(80, 100, 120, 'touch'))
+    vi.advanceTimersByTime(519)
+    expect(callbacks.onMapLongPress).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+
+    expect(callbacks.onMapLongPress).toHaveBeenCalledOnce()
+    expect(callbacks.onMapLongPress).toHaveBeenCalledWith(
+      expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }),
+      { x: 100, y: 120 },
+    )
+    expect(Reflect.get(engine, 'touchCameraGesture').size).toBe(0)
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(80, 100, 120, 'touch'))
+    engine.destroy()
+    vi.useRealTimers()
+  })
+
+  it('verwirft den Karten-Long-Press bei Bewegung, zweitem Finger und pointercancel', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    engine.setMap(map, {})
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(81, 100, 120, 'touch'))
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(81, 108, 120, 'touch'))
+    vi.advanceTimersByTime(520)
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(82, 120, 140, 'touch'))
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(83, 220, 140, 'touch'))
+    vi.advanceTimersByTime(520)
+
+    invokePointerHandler(engine, 'handlePointerCancel', pointerEvent(82, 120, 140, 'touch'))
+    invokePointerHandler(engine, 'handlePointerCancel', pointerEvent(83, 220, 140, 'touch'))
+    expect(callbacks.onMapLongPress).not.toHaveBeenCalled()
+    engine.destroy()
+    vi.useRealTimers()
+  })
+
+  it('öffnet auf einer vorhandenen Zauberfläche kein Kartenmenü', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    engine.setMap(map, {})
+    engine.setSpellEffects([effect('sphere')], null)
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(84, 240, 240, 'touch'))
+    vi.advanceTimersByTime(520)
+
+    expect(callbacks.onMapLongPress).not.toHaveBeenCalled()
+    expect(callbacks.onSpellEffectEditStateChange).toHaveBeenCalledWith('effect-sphere')
+    expect(callbacks.onSpellEffectDragStateChange).not.toHaveBeenCalled()
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(84, 240, 240, 'touch'))
+    expect(Reflect.get(engine, 'editingSpellEffectId')).toBe('effect-sphere')
+    engine.finishSpellEffectEditing()
+    expect(callbacks.onSpellEffectEditStateChange).toHaveBeenLastCalledWith(null)
+    engine.destroy()
+    vi.useRealTimers()
+  })
+
+  it('behandelt einen Token-Long-Press ausschließlich als Token-Interaktion', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    engine.setMap(map, {})
+    engine.setTokens([token], null)
+    const layers = Reflect.get(engine, 'layers') as { readonly tokens: Container }
+
+    layers.tokens.children[0]?.emit('pointerdown', {
+      pointerId: 86,
+      global: { x: 240, y: 240 },
+      stopPropagation: () => undefined,
+    } as FederatedPointerEvent)
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(86, 240, 240, 'touch'))
+    vi.advanceTimersByTime(520)
+
+    expect(callbacks.onTokenLongPress).toHaveBeenCalledWith(token.id, { x: 240, y: 240 })
+    expect(callbacks.onMapLongPress).not.toHaveBeenCalled()
+    engine.destroy()
+    vi.useRealTimers()
+  })
+
+  it('räumt einen ausstehenden Karten-Long-Press bei Kartenwechsel und Destroy auf', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    engine.setMap(map, {})
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(87, 100, 120, 'touch'))
+    engine.setMap({ ...map, id: 'next-map' }, {})
+    vi.advanceTimersByTime(520)
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(88, 120, 140, 'touch'))
+    engine.destroy()
+    vi.advanceTimersByTime(520)
+
+    expect(callbacks.onMapLongPress).not.toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
+  it('erstellt und bestätigt eine freie Vorschau ohne Token', () => {
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    const placement = {
+      kind: 'free',
+      presetId: 'shape-cone',
+      origin: { x: 3, y: 5 },
+    } as const
+    engine.setMap(map, {})
+    engine.setTokens([], null)
+    engine.setSpellPlacement(placement)
+
+    expect(Reflect.get(engine, 'createSpellPreview').call(engine)).toMatchObject({
+      effect: {
+        position: placement.origin,
+        attachedToCaster: false,
+      },
+    })
+    expect(Reflect.get(engine, 'createSpellPreview').call(engine).effect).not.toHaveProperty(
+      'casterTokenId',
+    )
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(85, 180, 210, 'touch'))
+    expect(callbacks.onSpellPlace).toHaveBeenCalledWith(
+      placement,
+      expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }),
+    )
     engine.destroy()
   })
 })

@@ -20,16 +20,25 @@ export interface SpellAreaPreset {
   readonly description: string
 }
 
-export interface SpellPlacement {
+export interface CasterSpellPlacement {
+  readonly kind: 'caster'
   readonly casterTokenId: string
   readonly presetId: string
 }
+
+export interface FreeSpellPlacement {
+  readonly kind: 'free'
+  readonly presetId: string
+  readonly origin: GridPoint
+}
+
+export type SpellPlacement = CasterSpellPlacement | FreeSpellPlacement
 
 export interface PlacedSpellEffect {
   readonly id: string
   readonly mapId: string
   readonly levelId?: string
-  readonly casterTokenId: string
+  readonly casterTokenId?: string
   readonly presetId: string
   readonly name: string
   readonly shape: SpellAreaShape
