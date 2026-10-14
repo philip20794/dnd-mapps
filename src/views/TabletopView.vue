@@ -68,6 +68,10 @@ const randomMapRequest = ref<MapGenerationRequest>({})
 const aiUsageRefreshKey = ref(0)
 const hasRandomMapConfiguration = ref(false)
 const spellPlacement = ref<SpellPlacement | null>(null)
+const tokenPlacementKind = ref<string | null>(null)
+const tokenPlacementTemplate = computed(
+  () => tokenTemplates.find((template) => template.kind === tokenPlacementKind.value) ?? null,
+)
 let autoSaveTimer: number | null = null
 let pendingCameraFit = false
 
@@ -153,6 +157,7 @@ onBeforeUnmount(cancelAutoSave)
 const selectMap = (mapId: string): void => {
   try {
     spellPlacement.value = null
+    tokenPlacementKind.value = null
     mapStore.selectMap(mapId)
     const map = mapStore.currentMap
     if (map && tokenStore.tokensForMap(map.id).length === 0) {
@@ -179,10 +184,14 @@ const createRandomMapWithRequest = async (request: MapGenerationRequest): Promis
     if (request.aiEnabled) aiUsageRefreshKey.value += 1
     randomMapDialogOpen.value = false
     const plannerLabel = result.planner === 'ai' ? 'mit Luna geplant' : 'lokal geplant'
-    appStore.setStatus(`${plan.theme.atmosphere === 'dark' ? 'Dunkle' : 'Helle'} Zufallskarte ${plannerLabel}`)
+    appStore.setStatus(
+      `${plan.theme.atmosphere === 'dark' ? 'Dunkle' : 'Helle'} Zufallskarte ${plannerLabel}`,
+    )
     scheduleAutoSave()
   } catch (error) {
-    appStore.setError(error instanceof Error ? error.message : 'Zufallskarte konnte nicht erstellt werden.')
+    appStore.setError(
+      error instanceof Error ? error.message : 'Zufallskarte konnte nicht erstellt werden.',
+    )
   }
 }
 
@@ -213,6 +222,7 @@ const addToken = (kind: string, position: { readonly x: number; readonly y: numb
   }
   try {
     tokenStore.addTokenFromTemplate(kind, currentMap.value.id, position, currentLevelId.value)
+    tokenPlacementKind.value = null
     appStore.setStatus('Token platziert')
     scheduleAutoSave()
   } catch (error) {
@@ -220,6 +230,15 @@ const addToken = (kind: string, position: { readonly x: number; readonly y: numb
       error instanceof Error ? error.message : 'Token konnte nicht platziert werden.',
     )
   }
+}
+
+const beginTokenPlacement = (kind: string): void => {
+  if (!currentMap.value || !currentLevelId.value) {
+    return
+  }
+  tokenPlacementKind.value = kind
+  spellPlacement.value = null
+  appStore.setStatus('Tokenposition auf der Karte auswählen')
 }
 
 const moveToken = (tokenId: string, position: { readonly x: number; readonly y: number }): void => {
@@ -237,6 +256,7 @@ const beginSpellPlacement = (casterTokenId: string, presetId: string): void => {
   }
   tokenStore.setSelectedToken(casterTokenId)
   spellEffectStore.setSelectedEffect(null)
+  tokenPlacementKind.value = null
   spellPlacement.value = { casterTokenId, presetId }
   appStore.setStatus(`${preset.name}: Position auswählen`)
 }
@@ -250,6 +270,7 @@ const placeSpell = (
   const preset = findSpellAreaPreset(presetId)
   if (!caster || !preset || !currentLevelId.value) {
     spellPlacement.value = null
+    tokenPlacementKind.value = null
     return
   }
   spellEffectStore.addFromPreset(preset, caster, target, currentLevelId.value)
@@ -299,6 +320,7 @@ const changeLevel = (transition: VerticalTransitionConfig): void => {
   }
 
   spellPlacement.value = null
+  tokenPlacementKind.value = null
 
   const tokenId = pickTransitionTokenId()
   if (tokenId) {
@@ -320,6 +342,7 @@ const selectLevel = (levelId: string): void => {
 
   try {
     spellPlacement.value = null
+    tokenPlacementKind.value = null
     mapStore.setCurrentLevel(currentMap.value.id, levelId)
     appStore.setStatus(`Ebene gewechselt: ${mapStore.currentLevelName}`)
     scheduleAutoSave()
@@ -375,6 +398,7 @@ const resetFog = async (): Promise<void> => {
 
 const resetSession = async (): Promise<void> => {
   cancelAutoSave()
+  tokenPlacementKind.value = null
   await sessionStore.resetLocalData()
   if (currentMap.value) {
     tokenStore.resetMapTokens(currentMap.value.id, currentMap.value.startTokens ?? [])
@@ -471,6 +495,7 @@ const recordExploration = (mapId: string, levelId: string, polygons: readonly Po
       <SidebarPanel
         :collapsed="appStore.sidebarCollapsed"
         :token-templates="tokenTemplates"
+        :token-placement-kind="tokenPlacementKind"
         :selected-token="tokenStore.selectedToken"
         :spell-effects="currentSpellEffects"
         :selected-spell-effect="selectedCurrentSpellEffect"
@@ -481,6 +506,7 @@ const recordExploration = (mapId: string, levelId: string, polygons: readonly Po
         @update-token-vision-angle="updateSelectedToken({ visionAngle: $event })"
         @update-token-vision-enabled="updateSelectedToken({ visionEnabled: $event })"
         @delete-token="deleteSelectedToken"
+        @begin-token-placement="beginTokenPlacement"
         @select-spell-effect="spellEffectStore.setSelectedEffect"
         @delete-spell-effect="deleteSpellEffect"
       />
@@ -490,6 +516,7 @@ const recordExploration = (mapId: string, levelId: string, polygons: readonly Po
         :level-id="currentLevelId"
         :tokens="tokenStore.tokens"
         :selected-token-id="tokenStore.selectedTokenId"
+        :token-placement-template="tokenPlacementTemplate"
         :spell-effects="spellEffectStore.effects"
         :selected-spell-effect-id="spellEffectStore.selectedEffectId"
         :spell-placement="spellPlacement"
@@ -499,6 +526,7 @@ const recordExploration = (mapId: string, levelId: string, polygons: readonly Po
         :persist-exploration="fogStore.persistExploration"
         :explored-mask="currentExplored"
         @drop-token="addToken"
+        @cancel-token-placement="tokenPlacementKind = null"
         @select-token="tokenStore.setSelectedToken"
         @move-token="moveToken"
         @begin-spell-placement="beginSpellPlacement"

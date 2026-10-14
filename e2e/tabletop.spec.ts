@@ -164,3 +164,95 @@ test('erstellt per Button eine neue Zufallskarte', async ({ page }) => {
 
   expect(pageErrors).toEqual([])
 })
+
+test('verarbeitet synthetisches Zwei-Finger-Pan und Pinch-Zoom', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.goto('/')
+  await page.getByTestId('map-select').selectOption('alte-krypta')
+  const canvas = page.getByTestId('map-canvas').locator('canvas')
+  await expect(canvas).toBeVisible()
+  const zoomBefore = await page.getByTestId('zoom-status').textContent()
+
+  await canvas.evaluate((element) => {
+    const bounds = element.getBoundingClientRect()
+    const dispatch = (
+      target: EventTarget,
+      type: string,
+      pointerId: number,
+      x: number,
+      y: number,
+      buttons: number,
+    ) =>
+      target.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          pointerId,
+          pointerType: 'touch',
+          isPrimary: pointerId === 101,
+          button: 0,
+          buttons,
+          clientX: bounds.left + x,
+          clientY: bounds.top + y,
+        }),
+      )
+
+    dispatch(element, 'pointerdown', 101, 100, 100, 1)
+    dispatch(element, 'pointerdown', 102, 300, 100, 1)
+    dispatch(window, 'pointermove', 101, 90, 120, 1)
+    dispatch(window, 'pointermove', 102, 340, 120, 1)
+    dispatch(window, 'pointerup', 102, 340, 120, 0)
+    dispatch(window, 'pointerup', 101, 90, 120, 0)
+  })
+
+  await expect(page.getByTestId('zoom-status')).not.toHaveText(zoomBefore ?? '')
+  const zoomAfter = await page.getByTestId('zoom-status').textContent()
+  await page.waitForTimeout(500)
+  await page.reload()
+  await expect(page.getByTestId('zoom-status')).toHaveText(zoomAfter ?? '')
+  expect(pageErrors).toEqual([])
+})
+
+test('platziert eine Token-Vorlage per Touch-Tap auf der Karte', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.goto('/')
+  await page.getByTestId('toggle-sidebar-button').click()
+  await expect(page.getByTestId('sidebar')).toBeVisible()
+  await page.getByTestId('token-template-hero').evaluate((element) => {
+    element.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 119,
+        pointerType: 'touch',
+      }),
+    )
+  })
+  await expect(page.getByTestId('token-placement-banner')).toBeVisible()
+  const overlay = page.getByTestId('token-placement-overlay')
+  await overlay.evaluate((element) => {
+    const bounds = element.getBoundingClientRect()
+    const dispatch = (type: string, pointerId: number, x: number, y: number) =>
+      element.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          pointerId,
+          pointerType: 'touch',
+          button: 0,
+          buttons: 1,
+          clientX: bounds.left + x,
+          clientY: bounds.top + y,
+        }),
+      )
+
+    dispatch('pointermove', 120, bounds.width * 0.55, bounds.height * 0.55)
+    dispatch('pointerdown', 120, bounds.width * 0.55, bounds.height * 0.55)
+  })
+
+  await expect(page.getByTestId('token-placement-banner')).toBeHidden()
+  await expect(page.getByTestId('token-properties')).toBeVisible()
+  expect(pageErrors).toEqual([])
+})

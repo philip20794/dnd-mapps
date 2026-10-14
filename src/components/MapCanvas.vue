@@ -6,7 +6,7 @@ import type { DoorState, MapDefinition } from '@/maps/api'
 import type { GridPoint, Polygon } from '@/types/geometry'
 import type { RuntimeSettings } from '@/types/settings'
 import type { PlacedSpellEffect, SpellEffectPatch, SpellPlacement } from '@/types/spells'
-import type { PlacedToken } from '@/types/tokens'
+import type { PlacedToken, TokenTemplate } from '@/types/tokens'
 import type { VerticalTransitionConfig } from '@/map-objects'
 import type { ExplorationMask } from '@/map-engine/fog/fogState'
 
@@ -15,6 +15,7 @@ const props = defineProps<{
   levelId: string | null
   tokens: readonly PlacedToken[]
   selectedTokenId: string | null
+  tokenPlacementTemplate: TokenTemplate | null
   spellEffects: readonly PlacedSpellEffect[]
   selectedSpellEffectId: string | null
   spellPlacement: SpellPlacement | null
@@ -27,6 +28,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   dropToken: [kind: string, position: GridPoint]
+  cancelTokenPlacement: []
   selectToken: [tokenId: string | null]
   moveToken: [tokenId: string, position: GridPoint]
   beginSpellPlacement: [casterTokenId: string, presetId: string]
@@ -46,6 +48,10 @@ const emit = defineEmits<{
 const host = ref<HTMLElement | null>(null)
 const spellMenu = ref({ open: false, tokenId: '', tokenName: '', x: 0, y: 0 })
 const spellEffectDragging = ref(false)
+const tokenPlacementPreview = ref<{
+  readonly position: GridPoint
+  readonly screen: { readonly x: number; readonly y: number }
+} | null>(null)
 let engine: MapEngine | null = null
 let resizeObserver: ResizeObserver | null = null
 
@@ -136,6 +142,13 @@ watch(
 )
 
 watch(
+  () => props.tokenPlacementTemplate,
+  () => {
+    tokenPlacementPreview.value = null
+  },
+)
+
+watch(
   () => props.selectedTokenId,
   () => {
     engine?.setTokens(props.tokens, props.selectedTokenId)
@@ -184,12 +197,9 @@ watch(
   { deep: true },
 )
 
-watch(
-  engineFogState,
-  (fogState) => {
-    engine?.setFogState(fogState)
-  },
-)
+watch(engineFogState, (fogState) => {
+  engine?.setFogState(fogState)
+})
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
@@ -216,6 +226,38 @@ const handleDrop = (event: DragEvent): void => {
   }
 }
 
+const updateTokenPlacementPreview = (event: PointerEvent): void => {
+  if (!props.tokenPlacementTemplate || !host.value) {
+    tokenPlacementPreview.value = null
+    return
+  }
+  const bounds = host.value.getBoundingClientRect()
+  const position = engine?.clientToGrid(event.clientX, event.clientY)
+  tokenPlacementPreview.value = position
+    ? {
+        position,
+        screen: { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
+      }
+    : null
+}
+
+const placeTokenFromTemplate = (event: PointerEvent): void => {
+  event.preventDefault()
+  event.stopPropagation()
+  updateTokenPlacementPreview(event)
+  const template = props.tokenPlacementTemplate
+  const preview = tokenPlacementPreview.value
+  if (template && preview) {
+    emit('dropToken', template.kind, preview.position)
+    emit('cancelTokenPlacement')
+  }
+}
+
+const cancelTokenPlacement = (): void => {
+  tokenPlacementPreview.value = null
+  emit('cancelTokenPlacement')
+}
+
 const chooseSpell = (presetId: string): void => {
   const tokenId = spellMenu.value.tokenId
   spellMenu.value.open = false
@@ -235,6 +277,35 @@ const chooseSpell = (presetId: string): void => {
       @dragover="handleDragOver"
       @drop="handleDrop"
     />
+    <div
+      v-if="tokenPlacementTemplate"
+      class="token-placement-overlay"
+      data-testid="token-placement-overlay"
+      @pointermove="updateTokenPlacementPreview"
+      @pointerdown="placeTokenFromTemplate"
+      @pointerleave="tokenPlacementPreview = null"
+    >
+      <div
+        v-if="tokenPlacementPreview"
+        class="token-placement-preview"
+        :style="{
+          left: `${tokenPlacementPreview.screen.x}px`,
+          top: `${tokenPlacementPreview.screen.y}px`,
+          backgroundColor: tokenPlacementTemplate.color,
+        }"
+        aria-hidden="true"
+      >
+        {{ tokenPlacementTemplate.symbol }}
+      </div>
+    </div>
+    <div
+      v-if="tokenPlacementTemplate"
+      class="token-placement-banner"
+      data-testid="token-placement-banner"
+    >
+      <span>{{ tokenPlacementTemplate.name }}: Position auf der Karte antippen</span>
+      <button type="button" @click="cancelTokenPlacement">Abbrechen</button>
+    </div>
     <div v-if="spellPlacement" class="spell-placement-banner" data-testid="spell-placement-banner">
       Position für die Form anklicken
       <button type="button" @click="emit('cancelSpellPlacement')">Abbrechen</button>

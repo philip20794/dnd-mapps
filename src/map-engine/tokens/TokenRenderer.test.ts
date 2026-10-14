@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { Container } from 'pixi.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Container, type FederatedPointerEvent } from 'pixi.js'
 import type { PixelPoint } from '@/types/geometry'
 import type { PlacedToken } from '@/types/tokens'
 import { TokenDragFrameQueue, TokenRenderer, type TokenRendererHandlers } from './TokenRenderer'
@@ -27,10 +27,40 @@ function token(id: string, x: number, color = '#3f8cff'): PlacedToken {
   }
 }
 
+function emitPointerDown(container: Container | undefined, pointerId: number, x: number): void {
+  container?.emit('pointerdown', {
+    pointerId,
+    global: { x, y: 96 },
+    stopPropagation: () => undefined,
+  } as FederatedPointerEvent)
+}
+
+function renderTokens(
+  renderer: TokenRenderer,
+  layer: Container,
+  selectionLayer: Container,
+  tokens: readonly PlacedToken[],
+  selectedTokenId: string | null,
+  tokenHandlers: TokenRendererHandlers,
+): void {
+  renderer.render(
+    layer,
+    selectionLayer,
+    tokens,
+    selectedTokenId,
+    48,
+    { x: 0, y: 0, zoom: 1 },
+    { x: 480, y: 480 },
+    0,
+    { visible: true, snap: true },
+    tokenHandlers,
+  )
+}
+
 describe('TokenDragFrameQueue', () => {
-  it('bündelt mehrere Pointer-Updates auf die letzte Position eines Frames', () => {
+  it('bündelt pro Pointer auf die letzte Position eines Frames', () => {
     const scheduled: FrameRequestCallback[] = []
-    const processed: PixelPoint[] = []
+    const processed: Array<{ pointerId: number; point: PixelPoint }> = []
     const queue = new TokenDragFrameQueue(
       (callback) => {
         scheduled.push(callback)
@@ -38,71 +68,191 @@ describe('TokenDragFrameQueue', () => {
       },
       () => undefined,
     )
+    const process = (pointerId: number, point: PixelPoint) => processed.push({ pointerId, point })
 
-    queue.schedule({ x: 10, y: 12 }, (point) => processed.push(point))
-    queue.schedule({ x: 18, y: 24 }, (point) => processed.push(point))
+    queue.schedule(1, { x: 10, y: 12 }, process)
+    queue.schedule(2, { x: 30, y: 32 }, process)
+    queue.schedule(1, { x: 18, y: 24 }, process)
+    queue.schedule(3, { x: 40, y: 42 }, process)
 
     expect(processed).toEqual([])
     scheduled[0]?.(0)
-    expect(processed).toEqual([{ x: 18, y: 24 }])
+    expect(processed).toEqual([
+      { pointerId: 1, point: { x: 18, y: 24 } },
+      { pointerId: 2, point: { x: 30, y: 32 } },
+      { pointerId: 3, point: { x: 40, y: 42 } },
+    ])
   })
 
-  it('wendet beim Loslassen die finale Pointer-Position sofort an', () => {
+  it('flusht und verwirft einzelne Pointer, ohne andere Updates zu verlieren', () => {
     let cancelledHandle: number | null = null
-    const processed: PixelPoint[] = []
+    const scheduled: FrameRequestCallback[] = []
+    const processed: Array<{ pointerId: number; point: PixelPoint }> = []
     const queue = new TokenDragFrameQueue(
-      () => 11,
+      (callback) => {
+        scheduled.push(callback)
+        return 11
+      },
       (handle) => {
         cancelledHandle = handle
       },
     )
+    const process = (pointerId: number, point: PixelPoint) => processed.push({ pointerId, point })
 
-    queue.schedule({ x: 10, y: 12 }, (point) => processed.push(point))
-    queue.flush((point) => processed.push(point), { x: 22, y: 26 })
+    queue.schedule(1, { x: 10, y: 12 }, process)
+    queue.schedule(2, { x: 30, y: 32 }, process)
+    queue.schedule(3, { x: 40, y: 42 }, process)
+    queue.flush(1, process, { x: 22, y: 26 })
+    queue.cancel(2)
 
-    expect(cancelledHandle).toBe(11)
-    expect(processed).toEqual([{ x: 22, y: 26 }])
+    expect(cancelledHandle).toBeNull()
+    expect(processed).toEqual([{ pointerId: 1, point: { x: 22, y: 26 } }])
+    scheduled[0]?.(0)
+    expect(processed).toEqual([
+      { pointerId: 1, point: { x: 22, y: 26 } },
+      { pointerId: 3, point: { x: 40, y: 42 } },
+    ])
   })
 })
 
 describe('TokenRenderer', () => {
+  afterEach(() => vi.useRealTimers())
+
   it('behält Container bei Positions- und Auswahländerungen bei', () => {
     const renderer = new TokenRenderer()
     const layer = new Container()
     const selectionLayer = new Container()
-    const camera = { x: 0, y: 0, zoom: 1 }
-    const first = token('first', 2)
-
-    renderer.render(
-      layer,
-      selectionLayer,
-      [first],
-      'first',
-      48,
-      camera,
-      { x: 480, y: 480 },
-      0,
-      { visible: true, snap: true },
-      handlers,
-    )
+    renderTokens(renderer, layer, selectionLayer, [token('first', 2)], 'first', handlers)
     const container = layer.children[0]
     const marker = selectionLayer.children[0]
 
-    renderer.render(
-      layer,
-      selectionLayer,
-      [token('first', 4)],
-      'first',
-      48,
-      camera,
-      { x: 480, y: 480 },
-      0,
-      { visible: true, snap: true },
-      handlers,
-    )
+    renderTokens(renderer, layer, selectionLayer, [token('first', 4)], 'first', handlers)
 
     expect(layer.children[0]).toBe(container)
     expect(selectionLayer.children[0]).toBe(marker)
     expect(container?.position.x).not.toBe(0)
+  })
+
+  it('ordnet einen Token-Drag eindeutig dem auslösenden Pointer zu', () => {
+    const renderer = new TokenRenderer()
+    const layer = new Container()
+    const selected: string[] = []
+    const dragHandlers: TokenRendererHandlers = {
+      ...handlers,
+      onSelect: (tokenId) => {
+        if (tokenId) selected.push(tokenId)
+      },
+    }
+    renderTokens(renderer, layer, new Container(), [token('first', 2)], null, dragHandlers)
+    emitPointerDown(layer.children[0], 17, 96)
+
+    expect(selected).toEqual(['first'])
+    expect(renderer.isPointerActiveFor(17)).toBe(true)
+    expect(renderer.isPointerActiveFor(18)).toBe(false)
+  })
+
+  it('bewegt drei Pointer unabhängig und committed nur den jeweils losgelassenen Token', () => {
+    const renderer = new TokenRenderer()
+    const layer = new Container()
+    const selectionLayer = new Container()
+    const tokens = [token('first', 2), token('second', 4), token('third', 6)]
+    const moves: Array<{ tokenId: string; position: { x: number; y: number } }> = []
+    const dragHandlers: TokenRendererHandlers = {
+      ...handlers,
+      onMoveEnd: (tokenId, position) => moves.push({ tokenId, position }),
+    }
+    renderTokens(renderer, layer, selectionLayer, tokens, null, dragHandlers)
+
+    for (const [index, pointerId] of [11, 12, 13].entries()) {
+      emitPointerDown(layer.children[index], pointerId, tokens[index]!.position.x * 48)
+      renderer.dragToScreenPoint(
+        pointerId,
+        { x: (tokens[index]!.position.x + 1) * 48, y: 96 },
+        48,
+        dragHandlers,
+      )
+    }
+
+    // A Pinia/selection update with stale positions must not move active visuals back.
+    renderTokens(renderer, layer, selectionLayer, tokens, 'second', dragHandlers)
+    expect(layer.children.map((child) => child.position.x)).toEqual([144, 240, 336])
+
+    expect(renderer.finishDrag(12, { visible: true, snap: true }, 48, dragHandlers)).toBe(true)
+    expect(renderer.isPointerActiveFor(11)).toBe(true)
+    expect(renderer.isPointerActiveFor(13)).toBe(true)
+    expect(moves).toEqual([{ tokenId: 'second', position: expect.objectContaining({ x: 5 }) }])
+
+    renderer.finishDrag(11, { visible: true, snap: true }, 48, dragHandlers)
+    renderer.finishDrag(13, { visible: true, snap: true }, 48, dragHandlers)
+    expect(moves.map((move) => move.tokenId)).toEqual(['second', 'first', 'third'])
+  })
+
+  it('bricht nur den angegebenen Pointer ab und sperrt doppelte Token-Zugriffe', () => {
+    const renderer = new TokenRenderer()
+    const layer = new Container()
+    const first = token('first', 2)
+    const second = token('second', 4)
+    const selected: string[] = []
+    const dragHandlers: TokenRendererHandlers = {
+      ...handlers,
+      onSelect: (tokenId) => {
+        if (tokenId) selected.push(tokenId)
+      },
+    }
+    renderTokens(renderer, layer, new Container(), [first, second], null, dragHandlers)
+
+    emitPointerDown(layer.children[0], 21, 96)
+    emitPointerDown(layer.children[0], 22, 96)
+    emitPointerDown(layer.children[1], 23, 192)
+    renderer.dragToScreenPoint(21, { x: 144, y: 96 }, 48, dragHandlers)
+    renderer.dragToScreenPoint(23, { x: 240, y: 96 }, 48, dragHandlers)
+    renderer.cancelPointerInteraction(21)
+
+    expect(renderer.isPointerActiveFor(21)).toBe(false)
+    expect(renderer.isPointerActiveFor(22)).toBe(false)
+    expect(renderer.isPointerActiveFor(23)).toBe(true)
+    expect(layer.children[0]?.position.x).toBe(96)
+    expect(layer.children[1]?.position.x).toBe(240)
+    expect(selected).toEqual(['first', 'second'])
+  })
+
+  it('führt Long Press pro Pointer aus, ohne einen dritten Drag zu beeinflussen', () => {
+    vi.useFakeTimers()
+    const renderer = new TokenRenderer()
+    const layer = new Container()
+    const tokens = [token('first', 2), token('second', 4), token('third', 6)]
+    const longPresses: string[] = []
+    const dragHandlers: TokenRendererHandlers = {
+      ...handlers,
+      onLongPress: (tokenId) => longPresses.push(tokenId),
+    }
+    renderTokens(renderer, layer, new Container(), tokens, null, dragHandlers)
+    for (const [index, pointerId] of [31, 32, 33].entries()) {
+      emitPointerDown(layer.children[index], pointerId, tokens[index]!.position.x * 48)
+    }
+    renderer.dragToScreenPoint(33, { x: 336, y: 96 }, 48, dragHandlers)
+    vi.advanceTimersByTime(520)
+
+    expect(longPresses).toEqual(['first', 'second'])
+    expect(renderer.isPointerActiveFor(31)).toBe(false)
+    expect(renderer.isPointerActiveFor(32)).toBe(false)
+    expect(renderer.isPointerActiveFor(33)).toBe(true)
+    expect(layer.children[2]?.position.x).toBe(336)
+  })
+
+  it('trifft den obersten Token anhand seiner tatsächlichen Kreisfläche', () => {
+    const renderer = new TokenRenderer()
+    const layer = new Container()
+    renderTokens(
+      renderer,
+      layer,
+      new Container(),
+      [token('lower', 2), token('upper', 2)],
+      null,
+      handlers,
+    )
+
+    expect(renderer.tokenIdAtScreenPoint({ x: 96, y: 96 }, 48)).toBe('upper')
+    expect(renderer.tokenIdAtScreenPoint({ x: 140, y: 140 }, 48)).toBeNull()
   })
 })

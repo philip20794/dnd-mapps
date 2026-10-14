@@ -17,6 +17,7 @@ import {
 } from '@/types/spells'
 import type { PlacedToken } from '@/types/tokens'
 import { fitCameraToMap, panCamera, resetCamera, zoomCameraAt } from './camera/camera'
+import { TouchCameraGesture } from './camera/TouchCameraGesture'
 import { AnimationManager } from './animations/AnimationManager'
 import {
   createMovementSegmentIndex,
@@ -133,6 +134,9 @@ export class MapEngine {
   private fogState: EngineFogState = { enabled: false, persistExploration: true, explored: null }
   private currentVisiblePolygons: readonly Polygon[] = []
   private panState: PanState | null = null
+  private readonly touchCameraGesture = new TouchCameraGesture()
+  private touchCameraFrame: number | null = null
+  private readonly capturedPointerIds = new Set<number>()
   private spacePressed = false
   private movementSegmentIndex: MovementSegmentIndex | null = null
   private preparedVisibilityGeometry: PreparedVisibilityGeometry | null = null
@@ -196,6 +200,7 @@ export class MapEngine {
     doorStates: Readonly<Record<string, DoorState>>,
     levelId = getDefaultLevelId(map),
   ): void {
+    this.cancelMapPointerInteractions()
     this.map = map
     this.doorStates = doorStates
     this.currentLevelId = levelId
@@ -213,6 +218,7 @@ export class MapEngine {
     if (!this.map || this.currentLevelId === levelId) {
       return
     }
+    this.cancelMapPointerInteractions()
     this.currentLevelId = levelId
     this.invalidateMovementGeometry()
     this.invalidateVisibilityGeometry()
@@ -247,6 +253,7 @@ export class MapEngine {
   }
 
   public setSpellPlacement(placement: SpellPlacement | null): void {
+    if (placement) this.cancelTouchCameraGesture()
     this.spellPlacement = placement
     const caster = placement
       ? this.tokens.find((token) => token.id === placement.casterTokenId)
@@ -352,9 +359,7 @@ export class MapEngine {
   }
 
   public destroy(): void {
-    this.cancelPendingTokenDrag()
-    this.clearSpellEffectLongPressTimer()
-    this.handlers.onSpellEffectDragStateChange(false)
+    this.cancelMapPointerInteractions()
     this.host.classList.remove('map-engine-host')
     this.removeDomEvents()
     this.staticChunkRenderer?.destroy()
@@ -749,7 +754,10 @@ export class MapEngine {
     )
   }
 
-  private selectedSpellHandleAt(point: GridPoint): 'resize' | 'rotate' | null {
+  private selectedSpellHandleAt(
+    point: GridPoint,
+    pointerType: PointerEvent['pointerType'],
+  ): 'resize' | 'rotate' | null {
     if (!this.map || !this.selectedSpellEffectId) {
       return null
     }
@@ -761,7 +769,8 @@ export class MapEngine {
     }
     const effect = this.resolvedSpellEffect(selected)
     const handles = spellEffectLocalHandles(effect)
-    const hitRadius = 16 / (this.map.gridSize * this.settings.camera.zoom)
+    const hitRadiusInPixels = pointerType === 'touch' ? 32 : pointerType === 'pen' ? 24 : 16
+    const hitRadius = hitRadiusInPixels / (this.map.gridSize * this.settings.camera.zoom)
     const resize = effectLocalToWorld(handles.resize, effect)
     const rotate = effectLocalToWorld(handles.rotate, effect)
     if (Math.hypot(point.x - resize.x, point.y - resize.y) <= hitRadius) {
@@ -780,6 +789,7 @@ export class MapEngine {
     startGrid: GridPoint,
   ): void {
     this.clearSpellEffectLongPressTimer()
+    this.capturePointer(event.pointerId)
     this.spellEffectInteraction = {
       pointerId: event.pointerId,
       effect,
@@ -913,10 +923,12 @@ export class MapEngine {
     }
     canvas.addEventListener('wheel', this.handleWheel, { passive: false })
     canvas.addEventListener('pointerdown', this.handlePointerDown)
+    canvas.addEventListener('pointerleave', this.handlePointerLeave)
+    canvas.addEventListener('lostpointercapture', this.handleLostPointerCapture)
     canvas.addEventListener('contextmenu', this.preventContextMenu)
     window.addEventListener('pointermove', this.handlePointerMove)
     window.addEventListener('pointerup', this.handlePointerUp)
-    window.addEventListener('pointercancel', this.handlePointerUp)
+    window.addEventListener('pointercancel', this.handlePointerCancel)
     window.addEventListener('keydown', this.handleKeyDown)
     window.addEventListener('keyup', this.handleKeyUp)
   }
@@ -926,11 +938,13 @@ export class MapEngine {
     if (canvas) {
       canvas.removeEventListener('wheel', this.handleWheel)
       canvas.removeEventListener('pointerdown', this.handlePointerDown)
+      canvas.removeEventListener('pointerleave', this.handlePointerLeave)
+      canvas.removeEventListener('lostpointercapture', this.handleLostPointerCapture)
       canvas.removeEventListener('contextmenu', this.preventContextMenu)
     }
     window.removeEventListener('pointermove', this.handlePointerMove)
     window.removeEventListener('pointerup', this.handlePointerUp)
-    window.removeEventListener('pointercancel', this.handlePointerUp)
+    window.removeEventListener('pointercancel', this.handlePointerCancel)
     window.removeEventListener('keydown', this.handleKeyDown)
     window.removeEventListener('keyup', this.handleKeyUp)
   }
@@ -967,23 +981,50 @@ export class MapEngine {
         return
       }
     }
+    if (event.pointerType === 'touch' && this.spellEffectInteraction) {
+      event.preventDefault()
+      return
+    }
     if (event.button === 0) {
       const point = this.clientToGridPoint(event.clientX, event.clientY, false)
       if (point) {
-        const handle = this.selectedSpellHandleAt(point)
+        const handle = this.selectedSpellHandleAt(point, event.pointerType)
         const selected = this.activeSpellEffects().find(
           (effect) => effect.id === this.selectedSpellEffectId,
         )
         if (handle && selected) {
           event.preventDefault()
-          this.tokenRenderer.cancelPointerInteraction()
+          if (this.tokenRenderer.isPointerActive) {
+            return
+          }
+          this.cancelTouchCameraGesture()
           this.beginSpellEffectInteraction(event, this.resolvedSpellEffect(selected), handle, point)
+          return
+        }
+
+        const bounds = this.host.getBoundingClientRect()
+        const local = clientToLocal({ x: event.clientX, y: event.clientY }, bounds)
+        const hitTokenId = this.map
+          ? this.tokenRenderer.tokenIdAtScreenPoint(local, this.map.gridSize)
+          : null
+        if (hitTokenId) {
+          if (this.tokenRenderer.isPointerActiveFor(event.pointerId)) {
+            this.cancelTouchCameraGesture()
+            this.capturePointer(event.pointerId)
+          }
+          event.preventDefault()
+          return
+        }
+
+        if (this.tokenRenderer.isPointerActive) {
+          event.preventDefault()
           return
         }
 
         const hitEffect = this.findSpellEffectAt(point)
         if (hitEffect) {
           event.preventDefault()
+          this.cancelTouchCameraGesture()
           this.tokenRenderer.cancelPointerInteraction()
           this.selectedSpellEffectId = hitEffect.id
           this.handlers.onSpellEffectSelect(hitEffect.id)
@@ -993,11 +1034,22 @@ export class MapEngine {
         }
       }
     }
+    if (event.pointerType === 'touch' && event.button === 0 && this.map) {
+      const bounds = this.host.getBoundingClientRect()
+      this.touchCameraGesture.add(
+        event.pointerId,
+        clientToLocal({ x: event.clientX, y: event.clientY }, bounds),
+      )
+      this.capturePointer(event.pointerId)
+      event.preventDefault()
+      return
+    }
     if (event.button !== 1 && event.button !== 2 && !this.spacePressed) {
       return
     }
     event.preventDefault()
     this.panState = { pointerId: event.pointerId, last: { x: event.clientX, y: event.clientY } }
+    this.capturePointer(event.pointerId)
   }
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
@@ -1011,7 +1063,7 @@ export class MapEngine {
       return
     }
     if (this.spellEffectInteraction?.pointerId === event.pointerId) {
-      const interaction = this.spellEffectInteraction
+      let interaction = this.spellEffectInteraction
       const point = this.clientToGridPoint(event.clientX, event.clientY, false)
       if (!point) {
         return
@@ -1023,10 +1075,14 @@ export class MapEngine {
         )
         if (distance > 7) {
           this.clearSpellEffectLongPressTimer()
-          this.spellEffectInteraction = null
+          interaction = { ...interaction, mode: 'move' }
+          this.spellEffectInteraction = interaction
+          this.host.classList.add('spell-effect-moving')
+          this.handlers.onSpellEffectDragStateChange(true)
+        } else {
+          event.preventDefault()
+          return
         }
-        event.preventDefault()
-        return
       }
       if (interaction.mode === 'move') {
         this.updateLocalSpellEffect(interaction.effect.id, {
@@ -1043,21 +1099,31 @@ export class MapEngine {
       event.preventDefault()
       return
     }
+    if (this.spellEffectInteraction) {
+      if (event.pointerType === 'touch') event.preventDefault()
+      return
+    }
     if (this.map) {
-      if (this.tokenRenderer.isPointerActive) {
+      if (this.tokenRenderer.isPointerActiveFor(event.pointerId)) {
         const bounds = this.host.getBoundingClientRect()
-        this.queueTokenDrag(clientToLocal({ x: event.clientX, y: event.clientY }, bounds))
+        this.queueTokenDrag(
+          event.pointerId,
+          clientToLocal({ x: event.clientX, y: event.clientY }, bounds),
+        )
         event.preventDefault()
         return
       }
+    }
+
+    if (this.touchCameraGesture.has(event.pointerId)) {
       const bounds = this.host.getBoundingClientRect()
-      const local = clientToLocal({ x: event.clientX, y: event.clientY }, bounds)
-      if (
-        this.tokenRenderer.dragToScreenPoint(local, this.map.gridSize, this.tokenRendererHandlers)
-      ) {
-        event.preventDefault()
-        return
-      }
+      this.touchCameraGesture.move(
+        event.pointerId,
+        clientToLocal({ x: event.clientX, y: event.clientY }, bounds),
+      )
+      this.scheduleTouchCameraUpdate()
+      event.preventDefault()
+      return
     }
 
     if (!this.panState || this.panState.pointerId !== event.pointerId) {
@@ -1078,28 +1144,55 @@ export class MapEngine {
 
   private readonly handlePointerUp = (event: PointerEvent): void => {
     if (this.finishSpellEffectInteraction(event)) {
+      this.releasePointer(event.pointerId)
       event.preventDefault()
       return
     }
     if (this.map) {
-      const tokenPointerWasActive = this.tokenRenderer.isPointerActive
+      const tokenPointerWasActive = this.tokenRenderer.isPointerActiveFor(event.pointerId)
       if (tokenPointerWasActive) {
         const bounds = this.host.getBoundingClientRect()
-        this.flushTokenDrag(clientToLocal({ x: event.clientX, y: event.clientY }, bounds))
+        this.flushTokenDrag(
+          event.pointerId,
+          clientToLocal({ x: event.clientX, y: event.clientY }, bounds),
+        )
       }
-      const finishedTokenDrag = this.tokenRenderer.finishDrag(
-        this.settings.grid,
-        this.map.gridSize,
-        this.tokenRendererHandlers,
-      )
+      const finishedTokenDrag = tokenPointerWasActive
+        ? this.tokenRenderer.finishDrag(
+            event.pointerId,
+            this.settings.grid,
+            this.map.gridSize,
+            this.tokenRendererHandlers,
+          )
+        : false
       if (finishedTokenDrag) {
         event.preventDefault()
       }
     }
 
+    if (this.finishTouchCameraPointer(event)) {
+      event.preventDefault()
+    }
+
     if (this.panState?.pointerId === event.pointerId) {
       this.panState = null
     }
+    this.releasePointer(event.pointerId)
+  }
+
+  private readonly handlePointerCancel = (event: PointerEvent): void => {
+    if (this.cancelPointerInteraction(event.pointerId)) event.preventDefault()
+    this.releasePointer(event.pointerId)
+  }
+
+  private readonly handleLostPointerCapture = (event: PointerEvent): void => {
+    this.capturedPointerIds.delete(event.pointerId)
+    this.cancelPointerInteraction(event.pointerId)
+  }
+
+  private readonly handlePointerLeave = (event: PointerEvent): void => {
+    if (this.capturedPointerIds.has(event.pointerId)) return
+    this.cancelPointerInteraction(event.pointerId)
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
@@ -1170,21 +1263,160 @@ export class MapEngine {
     this.movementSegmentIndex = null
   }
 
-  private queueTokenDrag(point: PixelPoint): void {
-    this.tokenDragQueue.schedule(point, (nextPoint) => this.applyTokenDrag(nextPoint))
+  private queueTokenDrag(pointerId: number, point: PixelPoint): void {
+    this.tokenDragQueue.schedule(pointerId, point, (nextPointerId, nextPoint) =>
+      this.applyTokenDrag(nextPointerId, nextPoint),
+    )
   }
 
-  private flushTokenDrag(finalPoint?: PixelPoint): void {
-    this.tokenDragQueue.flush((point) => this.applyTokenDrag(point), finalPoint)
+  private flushTokenDrag(pointerId: number, finalPoint?: PixelPoint): void {
+    this.tokenDragQueue.flush(
+      pointerId,
+      (nextPointerId, point) => this.applyTokenDrag(nextPointerId, point),
+      finalPoint,
+    )
   }
 
   private cancelPendingTokenDrag(): void {
     this.tokenDragQueue.cancel()
   }
 
-  private applyTokenDrag(point: PixelPoint): void {
+  private cancelTokenInteractions(): void {
+    this.cancelPendingTokenDrag()
+    this.tokenRenderer.cancelPointerInteraction()
+  }
+
+  private scheduleTouchCameraUpdate(): void {
+    if (this.touchCameraFrame !== null) return
+    this.touchCameraFrame = window.requestAnimationFrame(() => {
+      this.touchCameraFrame = null
+      this.applyTouchCameraUpdate()
+    })
+  }
+
+  private flushTouchCameraUpdate(): void {
+    if (this.touchCameraFrame !== null) {
+      window.cancelAnimationFrame(this.touchCameraFrame)
+      this.touchCameraFrame = null
+    }
+    this.applyTouchCameraUpdate()
+  }
+
+  private applyTouchCameraUpdate(): void {
+    const camera = this.touchCameraGesture.apply(this.settings.camera)
+    if (!camera) return
+    this.settings = { ...this.settings, camera }
+    this.applyCamera()
+    this.handlers.onCameraChange(camera)
+  }
+
+  private finishTouchCameraPointer(event: PointerEvent): boolean {
+    if (!this.touchCameraGesture.has(event.pointerId)) return false
+    const bounds = this.host.getBoundingClientRect()
+    this.touchCameraGesture.move(
+      event.pointerId,
+      clientToLocal({ x: event.clientX, y: event.clientY }, bounds),
+    )
+    this.flushTouchCameraUpdate()
+    this.touchCameraGesture.remove(event.pointerId)
+    return true
+  }
+
+  private cancelPointerInteraction(pointerId: number): boolean {
+    let cancelled = false
+    if (this.tokenRenderer.isPointerActiveFor(pointerId)) {
+      this.tokenDragQueue.cancel(pointerId)
+      this.tokenRenderer.cancelPointerInteraction(pointerId)
+      cancelled = true
+    }
+    if (this.touchCameraGesture.remove(pointerId)) {
+      this.cancelTouchCameraFrame()
+      cancelled = true
+    }
+    if (this.cancelSpellEffectInteraction(pointerId)) {
+      cancelled = true
+    }
+    if (this.panState?.pointerId === pointerId) {
+      this.panState = null
+      cancelled = true
+    }
+    return cancelled
+  }
+
+  private cancelTouchCameraFrame(): void {
+    if (this.touchCameraFrame !== null) {
+      window.cancelAnimationFrame(this.touchCameraFrame)
+      this.touchCameraFrame = null
+    }
+  }
+
+  private cancelTouchCameraGesture(): void {
+    const pointerIds = this.touchCameraGesture.pointerIds
+    this.cancelTouchCameraFrame()
+    this.touchCameraGesture.clear()
+    for (const pointerId of pointerIds) this.releasePointer(pointerId)
+  }
+
+  private cancelSpellEffectInteraction(pointerId?: number): boolean {
+    if (
+      !this.spellEffectInteraction ||
+      (pointerId !== undefined && this.spellEffectInteraction.pointerId !== pointerId)
+    ) {
+      return false
+    }
+    this.clearSpellEffectLongPressTimer()
+    this.spellEffectInteraction = null
+    this.host.classList.remove('spell-effect-moving')
+    this.handlers.onSpellEffectDragStateChange(false)
+    return true
+  }
+
+  private cancelMapPointerInteractions(): void {
+    this.cancelTokenInteractions()
+    this.cancelTouchCameraGesture()
+    this.cancelSpellEffectInteraction()
+    this.panState = null
+    this.releaseAllPointers()
+  }
+
+  private capturePointer(pointerId: number): void {
+    const canvas = this.app?.canvas
+    if (!canvas?.setPointerCapture) return
+    try {
+      canvas.setPointerCapture(pointerId)
+      this.capturedPointerIds.add(pointerId)
+    } catch {
+      // Synthetic pointer events and already-ended pointers cannot be captured.
+    }
+  }
+
+  private releasePointer(pointerId: number): void {
+    if (!this.capturedPointerIds.delete(pointerId)) return
+    const canvas = this.app?.canvas
+    if (!canvas?.releasePointerCapture) return
+    try {
+      if (!canvas.hasPointerCapture || canvas.hasPointerCapture(pointerId)) {
+        canvas.releasePointerCapture(pointerId)
+      }
+    } catch {
+      // The browser may already have released capture after pointercancel.
+    }
+  }
+
+  private releaseAllPointers(): void {
+    for (const pointerId of [...this.capturedPointerIds]) {
+      this.releasePointer(pointerId)
+    }
+  }
+
+  private applyTokenDrag(pointerId: number, point: PixelPoint): void {
     if (this.map) {
-      this.tokenRenderer.dragToScreenPoint(point, this.map.gridSize, this.tokenRendererHandlers)
+      this.tokenRenderer.dragToScreenPoint(
+        pointerId,
+        point,
+        this.map.gridSize,
+        this.tokenRendererHandlers,
+      )
     }
   }
 

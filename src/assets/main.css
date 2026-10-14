@@ -45,7 +45,6 @@ body,
 
 body {
   min-width: 900px;
-  user-select: none;
 }
 
 button,
@@ -639,6 +638,8 @@ select {
 .sidebar {
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   border-right: 1px solid var(--color-border);
   background: var(--color-panel);
 }
@@ -676,6 +677,13 @@ select {
   border-radius: var(--radius-md);
   padding: var(--space-2);
   background: #11161c;
+  text-align: left;
+}
+
+.token-template.active {
+  border-color: var(--color-accent);
+  background: #142a43;
+  box-shadow: inset 0 0 0 1px rgba(88, 166, 255, 0.2);
 }
 
 .token-template:focus-visible {
@@ -730,6 +738,56 @@ select {
   user-select: none;
 }
 
+.token-placement-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  touch-action: none;
+}
+
+.token-placement-preview {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  transform: translate(-50%, -50%);
+  border: 3px solid rgba(255, 255, 255, 0.92);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 4px rgba(88, 166, 255, 0.28),
+    0 8px 18px rgba(0, 0, 0, 0.45);
+  color: white;
+  font-size: 19px;
+  font-weight: 900;
+  opacity: 0.88;
+  pointer-events: none;
+}
+
+.token-placement-banner {
+  position: absolute;
+  top: var(--space-3);
+  left: 50%;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  transform: translateX(-50%);
+  border: 1px solid #5c8fc5;
+  border-radius: 999px;
+  padding: 7px 8px 7px 14px;
+  color: #dceeff;
+  background: rgba(16, 37, 59, 0.94);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.token-placement-banner button {
+  border-radius: 999px;
+  padding: 4px 9px;
+}
+
 .spell-menu-backdrop {
   position: absolute;
   inset: 0;
@@ -744,6 +802,7 @@ select {
   width: 340px;
   max-height: min(470px, calc(100% - 24px));
   overflow: hidden;
+  touch-action: pan-y;
   border: 1px solid #59697b;
   border-radius: 14px;
   padding: var(--space-3);
@@ -900,6 +959,42 @@ select {
   padding: 8px;
   text-align: left;
   background: #11161c;
+}
+
+@media (pointer: coarse) {
+  button,
+  select,
+  input:not([type='checkbox']):not([type='radio']) {
+    min-height: 44px;
+  }
+
+  input[type='checkbox'],
+  input[type='radio'] {
+    min-width: 22px;
+    min-height: 22px;
+  }
+
+  .icon-button,
+  .dialog-close-button,
+  .spell-menu-close {
+    width: 44px;
+    height: 44px;
+  }
+
+  .token-template {
+    min-height: 52px;
+  }
+
+  .spell-menu-option,
+  .spell-effect-list-item {
+    min-height: 52px;
+  }
+
+  .spell-placement-banner,
+  .token-placement-banner {
+    max-width: calc(100% - 24px);
+    font-size: 14px;
+  }
 }
 
 .spell-effect-list-item.active {

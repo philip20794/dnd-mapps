@@ -29,6 +29,25 @@ export const panCamera = (camera: CameraState, delta: PixelPoint): CameraState =
   zoom: camera.zoom,
 })
 
+export const transformCameraByGesture = (
+  camera: CameraState,
+  previousCenter: PixelPoint,
+  nextCenter: PixelPoint,
+  zoomDelta: number,
+): CameraState => {
+  const nextZoom = clampZoom(camera.zoom * zoomDelta)
+  const anchoredPoint = {
+    x: (previousCenter.x - camera.x) / camera.zoom,
+    y: (previousCenter.y - camera.y) / camera.zoom,
+  }
+
+  return {
+    x: nextCenter.x - anchoredPoint.x * nextZoom,
+    y: nextCenter.y - anchoredPoint.y * nextZoom,
+    zoom: nextZoom,
+  }
+}
+
 export const resetCamera = (): CameraState => ({
   x: 48,
   y: 48,

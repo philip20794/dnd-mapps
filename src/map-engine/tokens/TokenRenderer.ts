@@ -34,7 +34,10 @@ type RequestFrame = (callback: FrameRequestCallback) => number
 type CancelFrame = (handle: number) => void
 
 export class TokenDragFrameQueue {
-  private pendingPoint: PixelPoint | null = null
+  private readonly pendingPoints = new Map<
+    number,
+    { readonly point: PixelPoint; readonly process: (pointerId: number, point: PixelPoint) => void }
+  >()
   private frame: number | null = null
 
   public constructor(
@@ -42,30 +45,48 @@ export class TokenDragFrameQueue {
     private readonly cancelFrame: CancelFrame = window.cancelAnimationFrame.bind(window),
   ) {}
 
-  public schedule(point: PixelPoint, process: (point: PixelPoint) => void): void {
-    this.pendingPoint = point
+  public schedule(
+    pointerId: number,
+    point: PixelPoint,
+    process: (pointerId: number, point: PixelPoint) => void,
+  ): void {
+    this.pendingPoints.set(pointerId, { point, process })
     if (this.frame !== null) return
     this.frame = this.requestFrame(() => {
       this.frame = null
-      this.flush(process)
+      const pending = [...this.pendingPoints.entries()]
+      this.pendingPoints.clear()
+      for (const [pendingPointerId, entry] of pending) {
+        entry.process(pendingPointerId, entry.point)
+      }
     })
   }
 
-  public flush(process: (point: PixelPoint) => void, finalPoint?: PixelPoint): void {
-    if (finalPoint) this.pendingPoint = finalPoint
-    if (this.frame !== null) {
+  public flush(
+    pointerId: number,
+    process: (pointerId: number, point: PixelPoint) => void,
+    finalPoint?: PixelPoint,
+  ): void {
+    const pending = this.pendingPoints.get(pointerId)
+    this.pendingPoints.delete(pointerId)
+    const point = finalPoint ?? pending?.point
+    if (point) process(pointerId, point)
+    if (this.frame !== null && this.pendingPoints.size === 0) {
       this.cancelFrame(this.frame)
       this.frame = null
     }
-    const point = this.pendingPoint
-    this.pendingPoint = null
-    if (point) process(point)
   }
 
-  public cancel(): void {
-    if (this.frame !== null) this.cancelFrame(this.frame)
-    this.frame = null
-    this.pendingPoint = null
+  public cancel(pointerId?: number): void {
+    if (pointerId === undefined) {
+      this.pendingPoints.clear()
+    } else {
+      this.pendingPoints.delete(pointerId)
+    }
+    if (this.frame !== null && this.pendingPoints.size === 0) {
+      this.cancelFrame(this.frame)
+      this.frame = null
+    }
   }
 }
 
@@ -81,25 +102,54 @@ export class TokenRenderer {
   private selectionMarker: Graphics | null = null
   private selectedTokenId: string | null = null
   private selectionMarkerSize: number | null = null
-  private dragging: DragState | null = null
+  private readonly dragging = new Map<number, DragState>()
   private camera: CameraState = { x: 0, y: 0, zoom: 1 }
   private mapPixelSize: PixelPoint = { x: 0, y: 0 }
   private mapRotation: MapRotation = 0
-  private longPressTimer: number | null = null
+  private gridSize = 1
+  private readonly longPressTimers = new Map<number, number>()
 
   public get isPointerActive(): boolean {
-    return this.dragging !== null
+    return this.dragging.size > 0
   }
 
-  public cancelPointerInteraction(): void {
-    this.clearLongPressTimer()
-    if (this.dragging) {
-      const visual = this.tokenVisuals.get(this.dragging.tokenId)
-      if (visual) {
-        visual.container.cursor = 'grab'
+  public isPointerActiveFor(pointerId: number): boolean {
+    return this.dragging.has(pointerId)
+  }
+
+  public tokenIdAtScreenPoint(screenPoint: PixelPoint, gridSize: number): string | null {
+    const world = screenToWorld(screenPoint, this.camera, this.mapRotation, this.mapPixelSize)
+    const visuals = [...this.tokenVisuals.values()]
+    for (let index = visuals.length - 1; index >= 0; index -= 1) {
+      const visual = visuals[index]
+      if (!visual) continue
+      const radius = (visual.token.size * gridSize) / 2
+      const hitRadius = radius + Math.max(4, gridSize * 0.08)
+      if (
+        Math.hypot(world.x - visual.container.position.x, world.y - visual.container.position.y) <=
+        hitRadius
+      ) {
+        return visual.token.id
       }
     }
-    this.dragging = null
+    return null
+  }
+
+  public cancelPointerInteraction(pointerId?: number): void {
+    const pointerIds = pointerId === undefined ? [...this.dragging.keys()] : [pointerId]
+    for (const activePointerId of pointerIds) {
+      this.clearLongPressTimer(activePointerId)
+      const drag = this.dragging.get(activePointerId)
+      if (!drag) continue
+      const visual = this.tokenVisuals.get(drag.tokenId)
+      if (visual) {
+        visual.container.cursor = 'grab'
+        const position = gridToPixels(visual.token.position, this.gridSize)
+        visual.container.position.set(position.x, position.y)
+        this.positionSelectionMarkerForVisual(visual)
+      }
+      this.dragging.delete(activePointerId)
+    }
   }
 
   public render(
@@ -114,6 +164,7 @@ export class TokenRenderer {
     _grid: GridSettings,
     handlers: TokenRendererHandlers,
   ): void {
+    this.gridSize = gridSize
     this.setCamera(camera, mapPixelSize, mapRotation)
     const remainingIds = new Set(this.tokenVisuals.keys())
     for (const token of tokens) {
@@ -133,7 +184,8 @@ export class TokenRenderer {
       visual.container.removeFromParent()
       visual.container.destroy({ children: true })
       this.tokenVisuals.delete(tokenId)
-      if (this.dragging?.tokenId === tokenId) this.cancelPointerInteraction()
+      const pointerId = this.pointerIdForToken(tokenId)
+      if (pointerId !== null) this.cancelPointerInteraction(pointerId)
     }
     this.updateSelectionMarker(selectionLayer, selectedTokenId, gridSize)
   }
@@ -149,38 +201,39 @@ export class TokenRenderer {
   }
 
   public dragToScreenPoint(
+    pointerId: number,
     screenPoint: PixelPoint,
     gridSize: number,
     handlers: TokenRendererHandlers,
   ): boolean {
-    if (!this.dragging) {
+    const drag = this.dragging.get(pointerId)
+    if (!drag) {
       return false
     }
 
-    const visual = this.tokenVisuals.get(this.dragging.tokenId)
+    const visual = this.tokenVisuals.get(drag.tokenId)
     if (!visual) {
       return false
     }
 
     const movedDistance = Math.hypot(
-      screenPoint.x - this.dragging.pointerStart.x,
-      screenPoint.y - this.dragging.pointerStart.y,
+      screenPoint.x - drag.pointerStart.x,
+      screenPoint.y - drag.pointerStart.y,
     )
-    if (!this.dragging.moved && movedDistance < 7) {
+    if (!drag.moved && movedDistance < 7) {
       return true
     }
-    this.clearLongPressTimer()
+    this.clearLongPressTimer(pointerId)
 
     const world = screenToWorld(screenPoint, this.camera, this.mapRotation, this.mapPixelSize)
     const gridPoint = pixelsToGrid(world, gridSize)
     const next = {
-      x: gridPoint.x - this.dragging.pointerOffset.x,
-      y: gridPoint.y - this.dragging.pointerOffset.y,
+      x: gridPoint.x - drag.pointerOffset.x,
+      y: gridPoint.y - drag.pointerOffset.y,
     }
-    const accepted =
-      handlers.constrainMove?.(this.dragging.tokenId, this.dragging.lastValidPosition, next) ?? next
-    this.dragging.lastValidPosition = accepted
-    this.dragging.moved = true
+    const accepted = handlers.constrainMove?.(drag.tokenId, drag.lastValidPosition, next) ?? next
+    drag.lastValidPosition = accepted
+    drag.moved = true
     const pixelPosition = gridToPixels(accepted, gridSize)
     visual.container.position.set(pixelPosition.x, pixelPosition.y)
     if (this.selectedTokenId === visual.token.id && this.selectionMarker) {
@@ -190,25 +243,27 @@ export class TokenRenderer {
   }
 
   public finishDrag(
+    pointerId: number,
     grid: GridSettings,
     gridSize: number,
     handlers: TokenRendererHandlers,
   ): boolean {
-    if (!this.dragging) {
+    const drag = this.dragging.get(pointerId)
+    if (!drag) {
       return false
     }
 
-    this.clearLongPressTimer()
+    this.clearLongPressTimer(pointerId)
 
-    const visual = this.tokenVisuals.get(this.dragging.tokenId)
+    const visual = this.tokenVisuals.get(drag.tokenId)
     if (!visual) {
-      this.dragging = null
+      this.dragging.delete(pointerId)
       return false
     }
 
-    if (!this.dragging.moved) {
+    if (!drag.moved) {
       visual.container.cursor = 'grab'
-      this.dragging = null
+      this.dragging.delete(pointerId)
       return false
     }
 
@@ -219,15 +274,14 @@ export class TokenRenderer {
     )
     const snapped = snapGridPoint(unsnapped, grid.snap)
     const accepted =
-      handlers.constrainMove?.(this.dragging.tokenId, this.dragging.lastValidPosition, snapped) ??
-      snapped
+      handlers.constrainMove?.(drag.tokenId, drag.lastValidPosition, snapped) ?? snapped
     const pixelPosition = gridToPixels(accepted, gridSize)
     visual.container.position.set(pixelPosition.x, pixelPosition.y)
     if (this.selectedTokenId === visual.token.id && this.selectionMarker) {
       this.selectionMarker.position.set(pixelPosition.x, pixelPosition.y)
     }
-    handlers.onMoveEnd(this.dragging.tokenId, accepted)
-    this.dragging = null
+    handlers.onMoveEnd(drag.tokenId, accepted)
+    this.dragging.delete(pointerId)
     return true
   }
 
@@ -264,6 +318,7 @@ export class TokenRenderer {
       event.stopPropagation()
       const visual = this.tokenVisuals.get(token.id)
       if (!visual) return
+      if (this.dragging.has(event.pointerId) || this.pointerIdForToken(token.id) !== null) return
       const currentToken = visual.token
       handlers.onSelect(currentToken.id)
       container.cursor = 'grabbing'
@@ -275,7 +330,7 @@ export class TokenRenderer {
       )
       const gridPoint = pixelsToGrid(world, gridSize)
       const screenPoint = { x: event.global.x, y: event.global.y }
-      this.dragging = {
+      this.dragging.set(event.pointerId, {
         tokenId: token.id,
         pointerOffset: {
           x: gridPoint.x - currentToken.position.x,
@@ -284,19 +339,21 @@ export class TokenRenderer {
         lastValidPosition: currentToken.position,
         pointerStart: screenPoint,
         moved: false,
-      }
-      this.clearLongPressTimer()
-      this.longPressTimer = window.setTimeout(() => {
-        if (!this.dragging || this.dragging.tokenId !== token.id || this.dragging.moved) {
+      })
+      this.clearLongPressTimer(event.pointerId)
+      const timer = window.setTimeout(() => {
+        const drag = this.dragging.get(event.pointerId)
+        if (!drag || drag.tokenId !== token.id || drag.moved) {
           return
         }
-        const pixelPosition = gridToPixels(currentToken.position, gridSize)
+        const pixelPosition = gridToPixels(visual.token.position, gridSize)
         container.position.set(pixelPosition.x, pixelPosition.y)
         container.cursor = 'grab'
-        this.dragging = null
-        this.longPressTimer = null
+        this.dragging.delete(event.pointerId)
+        this.longPressTimers.delete(event.pointerId)
         handlers.onLongPress(token.id, screenPoint)
       }, 520)
+      this.longPressTimers.set(event.pointerId, timer)
     })
 
     const position = gridToPixels(token.position, gridSize)
@@ -316,9 +373,12 @@ export class TokenRenderer {
   }
 
   private updateTokenVisual(visual: TokenVisual, token: PlacedToken, gridSize: number): void {
-    const isDragging = this.dragging?.tokenId === token.id
-    if (!isDragging &&
-      (visual.renderedPosition.x !== token.position.x || visual.renderedPosition.y !== token.position.y)) {
+    const isDragging = this.pointerIdForToken(token.id) !== null
+    if (
+      !isDragging &&
+      (visual.renderedPosition.x !== token.position.x ||
+        visual.renderedPosition.y !== token.position.y)
+    ) {
       const position = gridToPixels(token.position, gridSize)
       visual.container.position.set(position.x, position.y)
     }
@@ -358,10 +418,24 @@ export class TokenRenderer {
       .stroke({ color: 0x120e0a, alpha: 0.18, width: Math.max(1, gridSize * 0.025) })
   }
 
-  private clearLongPressTimer(): void {
-    if (this.longPressTimer !== null) {
-      window.clearTimeout(this.longPressTimer)
-      this.longPressTimer = null
+  private clearLongPressTimer(pointerId: number): void {
+    const timer = this.longPressTimers.get(pointerId)
+    if (timer !== undefined) {
+      window.clearTimeout(timer)
+      this.longPressTimers.delete(pointerId)
+    }
+  }
+
+  private pointerIdForToken(tokenId: string): number | null {
+    for (const [pointerId, drag] of this.dragging) {
+      if (drag.tokenId === tokenId) return pointerId
+    }
+    return null
+  }
+
+  private positionSelectionMarkerForVisual(visual: TokenVisual): void {
+    if (this.selectedTokenId === visual.token.id && this.selectionMarker) {
+      this.selectionMarker.position.set(visual.container.position.x, visual.container.position.y)
     }
   }
 
@@ -395,10 +469,12 @@ export class TokenRenderer {
     }
     const marker = this.selectionMarker
     if (!marker) return
-    const position = gridToPixels(token.position, gridSize)
-    if (markerWasCreated || this.dragging?.tokenId !== token.id) {
-      marker.position.set(position.x, position.y)
-    }
+    const visual = this.tokenVisuals.get(token.id)
+    const position =
+      visual && this.pointerIdForToken(token.id) !== null
+        ? visual.container.position
+        : gridToPixels(token.position, gridSize)
+    marker.position.set(position.x, position.y)
   }
 
   private createSelectionMarker(token: PlacedToken, gridSize: number): Graphics {
