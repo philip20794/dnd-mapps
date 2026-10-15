@@ -15,6 +15,7 @@ test('benutzt die Beispielkarte ohne unbehandelte Seitenfehler', async ({ page }
   await page.goto('/')
   await page.getByTestId('map-select').selectOption('alte-krypta')
   await expect(page.getByTestId('map-select')).toHaveValue('alte-krypta')
+  await page.getByTestId('toolbar-more-button').click()
   await page.getByTestId('reset-menu-button').click()
   await page.getByTestId('reset-session-button').click()
   await expect(page.getByTestId('level-status')).toContainText('Krypta')
@@ -126,8 +127,10 @@ test('erstellt per Button eine neue Zufallskarte', async ({ page }) => {
 
   await page.goto('/')
   await expect(page.getByTestId('sidebar')).toBeHidden()
+  await page.getByTestId('toolbar-more-button').click()
   await page.getByTestId('generate-random-map-button').click()
   await expect(page.getByTestId('map-select')).toHaveValue('zufallskarte')
+  await page.getByTestId('toolbar-more-button').click()
   await page.getByTestId('open-random-map-config-button').click()
   await expect(page.getByTestId('random-map-dialog')).toBeVisible()
   await page.getByTestId('generation-biome-forest').click()
@@ -140,7 +143,9 @@ test('erstellt per Button eine neue Zufallskarte', async ({ page }) => {
     1,
   )
 
+  await page.getByTestId('toolbar-more-button').click()
   await page.getByTestId('generate-random-map-button').click()
+  await page.getByTestId('toolbar-more-button').click()
   await page.getByTestId('open-random-map-config-button').click()
   await page.getByTestId('generation-atmosphere-dark').click()
   await page.getByTestId('confirm-random-map-button').click()
@@ -171,6 +176,7 @@ test('bearbeitet Objekte, Wände und Türen mit gemeinsamem Undo-Verlauf', async
   await page.goto('/')
   await page.getByTestId('enter-map-editor').click()
   await expect(page.getByTestId('map-editor-toolbar')).toBeVisible()
+  await page.getByTestId('map-editor-tool-object').click()
 
   const canvas = page.getByTestId('map-canvas').locator('canvas')
   const tapCanvas = async (xFactor: number, yFactor: number, pointerId: number) => {
@@ -511,14 +517,18 @@ async function expectInsideViewport(
 }
 
 test('passt Toolbar, Karte und ErstellungsmenÃ¼ an alle Ziel-Viewports an', async ({ page }) => {
-  for (const viewport of [
+  const viewports = [
     { width: 320, height: 640 },
     { width: 390, height: 844 },
+    { width: 768, height: 900 },
     { width: 844, height: 390 },
     { width: 1440, height: 900 },
-  ]) {
+    { width: 1920, height: 1080 },
+  ]
+  await page.setViewportSize(viewports[0])
+  await page.goto('/')
+  for (const viewport of viewports) {
     await page.setViewportSize(viewport)
-    await page.goto('/')
     await expect(page.getByTestId('toolbar')).toBeVisible()
     await expectInsideViewport(page, page.getByTestId('toolbar'))
     await expect(page.getByTestId('map-canvas').locator('canvas')).toBeVisible()
@@ -526,15 +536,12 @@ test('passt Toolbar, Karte und ErstellungsmenÃ¼ an alle Ziel-Viewports an', as
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true)
 
-    if (viewport.width <= 900) {
-      await page.getByTestId('toolbar-more-button').click()
-      await expect(page.getByTestId('generate-random-map-button')).toBeVisible()
-      await page.getByTestId('reset-menu-button').scrollIntoViewIfNeeded()
-      await expect(page.getByTestId('reset-menu-button')).toBeVisible()
-      await expectInsideViewport(page, page.getByTestId('toolbar-more-button'))
-    } else {
-      await expect(page.getByTestId('generate-random-map-button')).toBeVisible()
-    }
+    await page.getByTestId('toolbar-more-button').click()
+    await expect(page.getByTestId('generate-random-map-button')).toBeVisible()
+    await page.getByTestId('reset-menu-button').scrollIntoViewIfNeeded()
+    await expect(page.getByTestId('reset-menu-button')).toBeVisible()
+    await expectInsideViewport(page, page.getByTestId('toolbar-more-button'))
+    await page.getByTestId('toolbar-more-button').click()
 
     const canvas = page.getByTestId('map-canvas').locator('canvas')
     await canvas.evaluate(async (element) => {

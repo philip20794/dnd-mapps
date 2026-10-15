@@ -738,7 +738,8 @@ function updateEditorDoor(id: string, patch: Partial<DoorDefinition>): void {
   const draft = mapEditorStore.draft
   if (!draft) return
   let next = patch.segment ? resizeDoor(draft, id, patch.segment) : draft
-  const { segment: _segment, ...metadataPatch } = patch
+  const metadataPatch = { ...patch }
+  delete metadataPatch.segment
   if (Object.keys(metadataPatch).length > 0) next = updateDoor(next, id, metadataPatch)
   commitEditorMap(next, mapEditorStore.selection)
 }
@@ -1012,6 +1013,7 @@ async function importEditorMap(json: string): Promise<void> {
         @error="appStore.setError"
         @editor-select="mapEditorStore.select"
         @editor-commit="commitEditorMap"
+        @editor-cancel-tool="mapEditorStore.setTool('select')"
         @editor-place-object="placeEditorObject"
       />
     </div>

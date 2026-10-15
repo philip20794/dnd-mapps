@@ -60,6 +60,7 @@ const emit = defineEmits<{
   error: [message: string]
   editorSelect: [selection: MapEditorSelection | null]
   editorCommit: [map: MapDefinition, selection: MapEditorSelection | null]
+  editorCancelTool: []
   editorPlaceObject: [template: Pick<MapObjectDefinition, 'type' | 'preset'>, position: GridPoint]
 }>()
 
@@ -207,6 +208,7 @@ onMounted(async () => {
     onError: (message) => emit('error', message),
     onEditorSelect: (selection) => emit('editorSelect', selection),
     onEditorCommit: (map, selection) => emit('editorCommit', map, selection),
+    onEditorCancelTool: () => emit('editorCancelTool'),
   })
   await engine.init()
   syncMap()

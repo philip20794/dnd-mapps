@@ -52,6 +52,7 @@ export interface MapEditorControllerHandlers {
     selection: MapEditorSelection | null,
     dirtyMaterialChunks?: ReadonlySet<string>,
   ) => void
+  readonly onCancelTool?: () => void
 }
 
 const registry = createDefaultObjectRegistry()
@@ -66,6 +67,7 @@ const midpoint = (segment: Segment): GridPoint => ({
 
 export class MapEditorController {
   private readonly graphics = new Graphics({ label: 'map-editor-overlay' })
+  private active = false
   private map: MapDefinition | null = null
   private levelId = 'ground'
   private state: MapEditorState = {
@@ -94,7 +96,24 @@ export class MapEditorController {
     private readonly handlers: MapEditorControllerHandlers,
   ) {
     this.graphics.eventMode = 'none'
+    this.graphics.visible = false
     selectionLayer.addChild(this.graphics)
+  }
+
+  public setActive(active: boolean): void {
+    if (this.active === active) return
+    this.active = active
+    this.graphics.visible = active
+    if (!active) {
+      this.interaction = null
+      this.materialStroke = null
+      this.previewMap = null
+      this.wallStart = null
+      this.hoverPoint = null
+      this.graphics.clear()
+      return
+    }
+    this.draw()
   }
 
   public setMap(map: MapDefinition | null, levelId: string): void {
@@ -129,7 +148,7 @@ export class MapEditorController {
   }
 
   public pointerDown(event: PointerEvent, point: GridPoint): boolean {
-    if (!this.map || event.button !== 0) return false
+    if (!this.active || !this.map || event.button !== 0) return false
     const accepted = this.snap(point)
     if (this.state.tool === 'material-brush' || this.state.tool === 'material-eraser') {
       this.materialStroke = { pointerId: event.pointerId, points: [point] }
@@ -216,6 +235,7 @@ export class MapEditorController {
   }
 
   public pointerMove(event: PointerEvent, point: GridPoint): boolean {
+    if (!this.active) return false
     this.hoverPoint = this.snap(point)
     if (this.materialStroke?.pointerId === event.pointerId) {
       this.materialStroke.points.push(point)
@@ -224,7 +244,7 @@ export class MapEditorController {
     }
     const interaction = this.interaction
     if (!interaction || interaction.pointerId !== event.pointerId) {
-      if (this.state.tool === 'wall') this.draw()
+      if (this.state.tool !== 'select') this.draw()
       return this.state.tool !== 'select'
     }
     if (distance(interaction.startPoint, point) > 5 / (48 * this.zoom)) interaction.moved = true
@@ -234,6 +254,7 @@ export class MapEditorController {
   }
 
   public pointerUp(event: PointerEvent, point: GridPoint): boolean {
+    if (!this.active) return false
     if (this.materialStroke?.pointerId === event.pointerId && this.map) {
       this.materialStroke.points.push(point)
       const result =
@@ -295,6 +316,10 @@ export class MapEditorController {
     if (this.materialStroke) {
       this.materialStroke = null
       this.draw()
+      return true
+    }
+    if (this.state.tool === 'object' && this.state.objectTemplate) {
+      this.handlers.onCancelTool?.()
       return true
     }
     if (!this.wallStart) return false
@@ -520,7 +545,7 @@ export class MapEditorController {
   private draw(): void {
     const map = this.previewMap ?? this.map
     this.graphics.clear()
-    if (!map) return
+    if (!this.active || !map) return
     const gridSize = map.gridSize
     const lineWidth = Math.max(1.5, 2 / this.zoom)
     for (const wall of map.walls) {
@@ -543,6 +568,26 @@ export class MapEditorController {
         .lineTo(this.hoverPoint.x * gridSize, this.hoverPoint.y * gridSize)
         .stroke({ color: 0xfde68a, alpha: 0.92, width: Math.max(2, 3 / this.zoom) })
       this.drawHandle(this.wallStart, gridSize, 0xfde68a)
+    }
+    if (this.state.tool === 'object' && this.state.objectTemplate && this.hoverPoint) {
+      const preview = resolveMapObject(
+        {
+          ...this.state.objectTemplate,
+          levelId: this.levelId,
+          position: this.hoverPoint,
+        },
+        registry,
+        map.objects.length,
+      )
+      const handles = this.objectHandles(preview)
+      const first = handles.corners[0]
+      this.graphics.moveTo(first.x * gridSize, first.y * gridSize)
+      for (const corner of handles.corners.slice(1))
+        this.graphics.lineTo(corner.x * gridSize, corner.y * gridSize)
+      this.graphics
+        .lineTo(first.x * gridSize, first.y * gridSize)
+        .fill({ color: 0x67aeff, alpha: 0.16 })
+        .stroke({ color: 0x67aeff, alpha: 0.95, width: Math.max(2, 3 / this.zoom) })
     }
     if (
       this.state.tool === 'material-brush' ||

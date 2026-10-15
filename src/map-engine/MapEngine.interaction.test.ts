@@ -432,6 +432,22 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
     engine.destroy()
   })
 
+  it('blendet technische Editor-Overlays nach dem Wechsel in den Spielmodus dauerhaft aus', () => {
+    const engine = new MapEngine(document.createElement('div'), handlers())
+    engine.setMap(map, {})
+    const overlay = Reflect.get(engine, 'layers').selection.getChildByLabel('map-editor-overlay')
+
+    expect(overlay.visible).toBe(false)
+    engine.setInteractionMode('map-editor')
+    expect(overlay.visible).toBe(true)
+
+    engine.setInteractionMode('play')
+    engine.setMap({ ...map, id: 'map-after-editor' }, {})
+    engine.setLevel('ground')
+    expect(overlay.visible).toBe(false)
+    engine.destroy()
+  })
+
   it('rotates the map with a two-finger twist gesture', () => {
     const callbacks = handlers()
     const engine = new MapEngine(document.createElement('div'), callbacks)

@@ -2,7 +2,7 @@ import { Container } from 'pixi.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { MapDefinition } from '@/maps/api'
 import type { MapEditorSelection, MapEditorState } from '@/map-editor/types'
-import { MapEditorController } from './MapEditorController'
+import { MapEditorController, type MapEditorControllerHandlers } from './MapEditorController'
 
 const map: MapDefinition = {
   id: 'controller-test',
@@ -34,8 +34,9 @@ describe('MapEditorController', () => {
     const selected: Array<MapEditorSelection | null> = []
     const controller = new MapEditorController(new Container(), {
       onSelect: (selection) => selected.push(selection),
-      onCommit: vi.fn(),
+      onCommit: vi.fn<MapEditorControllerHandlers['onCommit']>(),
     })
+    controller.setActive(true)
     controller.setMap(map, 'ground')
     controller.setState(state())
 
@@ -49,11 +50,12 @@ describe('MapEditorController', () => {
   })
 
   it('commits one map update for a complete touch drag', () => {
-    const commits = vi.fn()
+    const commits = vi.fn<MapEditorControllerHandlers['onCommit']>()
     const controller = new MapEditorController(new Container(), {
-      onSelect: vi.fn(),
+      onSelect: vi.fn<MapEditorControllerHandlers['onSelect']>(),
       onCommit: commits,
     })
+    controller.setActive(true)
     controller.setMap(map, 'ground')
     controller.setState(state({ kind: 'object', id: 'crate-a' }))
 
@@ -72,11 +74,12 @@ describe('MapEditorController', () => {
   })
 
   it('creates no zero-length wall from two identical touch taps', () => {
-    const commits = vi.fn()
+    const commits = vi.fn<MapEditorControllerHandlers['onCommit']>()
     const controller = new MapEditorController(new Container(), {
-      onSelect: vi.fn(),
+      onSelect: vi.fn<MapEditorControllerHandlers['onSelect']>(),
       onCommit: commits,
     })
+    controller.setActive(true)
     controller.setMap(map, 'ground')
     controller.setState({ tool: 'wall', selection: null, snap: false, objectTemplate: null })
 
@@ -88,11 +91,12 @@ describe('MapEditorController', () => {
   })
 
   it('collects a fast touch brush stroke and commits it as one material history action', () => {
-    const commits = vi.fn()
+    const commits = vi.fn<MapEditorControllerHandlers['onCommit']>()
     const controller = new MapEditorController(new Container(), {
-      onSelect: vi.fn(),
+      onSelect: vi.fn<MapEditorControllerHandlers['onSelect']>(),
       onCommit: commits,
     })
+    controller.setActive(true)
     controller.setMap(map, 'ground')
     controller.setState({
       ...state(),
@@ -114,6 +118,48 @@ describe('MapEditorController', () => {
     expect(committed.materialLayers?.[0]?.areas.length).toBeLessThan(6)
     expect(committed.materialLayers?.[0]?.areas.every((area) => area.material === 'mud')).toBe(true)
     expect(commits.mock.calls[0]?.[2]).toBeInstanceOf(Set)
+    controller.destroy()
+  })
+
+  it('never renders editor overlays in play mode, including after leaving the editor and changing maps', () => {
+    const layer = new Container()
+    const controller = new MapEditorController(layer, {
+      onSelect: vi.fn<MapEditorControllerHandlers['onSelect']>(),
+      onCommit: vi.fn<MapEditorControllerHandlers['onCommit']>(),
+    })
+    const overlay = layer.getChildByLabel('map-editor-overlay')
+
+    controller.setMap(map, 'ground')
+    expect(overlay?.visible).toBe(false)
+
+    controller.setActive(true)
+    expect(overlay?.visible).toBe(true)
+    controller.setActive(false)
+    controller.setMap({ ...map, id: 'another-map' }, 'ground')
+    controller.setState({ ...state(), tool: 'wall' })
+
+    expect(overlay?.visible).toBe(false)
+    expect(controller.pointerDown(pointer(12), { x: 3, y: 3 })).toBe(false)
+    controller.destroy()
+  })
+
+  it('cancels pending object placement through the shared Escape action', () => {
+    const cancelTool = vi.fn<NonNullable<MapEditorControllerHandlers['onCancelTool']>>()
+    const controller = new MapEditorController(new Container(), {
+      onSelect: vi.fn<MapEditorControllerHandlers['onSelect']>(),
+      onCommit: vi.fn<MapEditorControllerHandlers['onCommit']>(),
+      onCancelTool: cancelTool,
+    })
+    controller.setActive(true)
+    controller.setMap(map, 'ground')
+    controller.setState({
+      ...state(),
+      tool: 'object',
+      objectTemplate: { type: 'crate', preset: 'small-crate' },
+    })
+
+    expect(controller.cancelPendingTool()).toBe(true)
+    expect(cancelTool).toHaveBeenCalledOnce()
     controller.destroy()
   })
 })

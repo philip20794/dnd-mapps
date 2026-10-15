@@ -65,6 +65,8 @@ describe('MapEditorToolbar', () => {
         ],
       },
     })
+    await wrapper.get('[data-testid="map-editor-tool-object"]').trigger('click')
+    await wrapper.setProps({ tool: 'object' })
     await wrapper.get('[data-testid="map-editor-preset-small-crate"]').trigger('click')
     await wrapper.get('[data-testid="map-editor-tool-wall"]').trigger('click')
     await wrapper.get('[data-testid="map-editor-snap"]').setValue(false)

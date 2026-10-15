@@ -114,6 +114,7 @@ export interface MapEngineHandlers {
   readonly onError: (message: string) => void
   readonly onEditorSelect?: (selection: MapEditorSelection | null) => void
   readonly onEditorCommit?: (map: MapDefinition, selection: MapEditorSelection | null) => void
+  readonly onEditorCancelTool?: () => void
 }
 
 export type MapInteractionMode = 'play' | 'map-editor'
@@ -237,6 +238,7 @@ export class MapEngine {
         this.pendingMaterialChunks = dirtyMaterialChunks ?? null
         this.handlers.onEditorCommit?.(map, selection)
       },
+      onCancelTool: () => this.handlers.onEditorCancelTool?.(),
     })
   }
 
@@ -319,6 +321,7 @@ export class MapEngine {
   }
 
   public setInteractionMode(mode: MapInteractionMode): void {
+    this.editorController.setActive(mode === 'map-editor')
     if (this.interactionMode === mode) return
     this.cancelMapPointerInteractions()
     this.interactionMode = mode
