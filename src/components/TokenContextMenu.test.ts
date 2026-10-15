@@ -22,6 +22,7 @@ describe('TokenContextMenu', () => {
 
   it('gibt Farbe und Sichtwerte für den ausgewählten Token weiter', async () => {
     const wrapper = mountMenu()
+    await wrapper.get('[data-testid="token-context-properties"]').trigger('click')
     await wrapper.get('[data-testid="token-context-color-input"]').setValue('#ff6600')
     await wrapper.get('[data-testid="token-context-vision-range"]').setValue('4')
     await wrapper.get('[data-testid="token-context-vision-enabled"]').setValue(false)
@@ -33,7 +34,7 @@ describe('TokenContextMenu', () => {
 
   it('fordert das Löschen explizit ein und behält die Zauberaktion bei', async () => {
     const wrapper = mountMenu()
-    await wrapper.get('.token-context-action.primary').trigger('click')
+    await wrapper.get('[data-testid="token-context-create-spell"]').trigger('click')
     await wrapper.get('[data-testid="token-context-delete"]').trigger('click')
 
     expect(wrapper.emitted('createSpell')).toEqual([['token-1']])
@@ -52,5 +53,51 @@ describe('TokenContextMenu', () => {
     expect(wrapper.emitted('close')).toBeUndefined()
     await wrapper.get('[data-testid="token-context-backdrop"]').trigger('pointerdown')
     expect(wrapper.emitted('close')).toEqual([[]])
+  })
+
+  it('emits rename and duplicate actions for the context token', async () => {
+    const wrapper = mountMenu()
+
+    await wrapper.get('[data-testid="token-context-rename"]').trigger('click')
+    await wrapper.get('[data-testid="token-context-duplicate"]').trigger('click')
+
+    expect(wrapper.emitted('renameToken')).toEqual([['token-1']])
+    expect(wrapper.emitted('duplicateToken')).toEqual([['token-1']])
+  })
+
+  it('keeps detailed properties behind the quick action and forwards their changes', async () => {
+    const wrapper = mountMenu()
+    expect(wrapper.find('[data-testid="token-context-color-input"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="token-context-properties"]').trigger('click')
+    await wrapper.get('[data-testid="token-context-size-input"]').setValue('2')
+    await wrapper.get('[data-testid="token-context-rotation-input"]').setValue('90')
+    await wrapper.get('[data-testid="token-context-vision-angle"]').setValue('120')
+    await wrapper.get('[data-testid="token-context-properties-back"]').trigger('click')
+
+    expect(wrapper.emitted('updateToken')).toEqual([
+      ['token-1', { size: 2 }],
+      ['token-1', { rotation: 90 }],
+      ['token-1', { visionAngle: 120 }],
+    ])
+    expect(wrapper.text()).toContain('Duplizieren')
+  })
+
+  it('toggles a configured vision range from the quick actions', async () => {
+    const wrapper = mountMenu()
+    await wrapper.get('[data-testid="token-context-vision-toggle"]').trigger('click')
+
+    expect(wrapper.emitted('updateVisionEnabled')).toEqual([['token-1', false]])
+  })
+
+  it('aktiviert die Einzelsicht nur für Spieler-Tokens', async () => {
+    const wrapper = mountMenu()
+    await wrapper.get('[data-testid="token-context-focus-visibility"]').trigger('click')
+
+    expect(wrapper.emitted('focusVisibility')).toEqual([['token-1']])
+    expect(wrapper.emitted('close')).toEqual([[]])
+
+    await wrapper.setProps({ token: { ...token, category: 'monster' } })
+    expect(wrapper.find('[data-testid="token-context-focus-visibility"]').exists()).toBe(false)
   })
 })

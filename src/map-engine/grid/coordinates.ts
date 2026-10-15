@@ -68,6 +68,15 @@ export const snapGridPoint = (point: GridPoint, enabled: boolean): GridPoint => 
   return axialToGrid(roundAxial(gridToAxial(point)))
 }
 
+export function hexDistanceBetweenGridPoints(start: GridPoint, end: GridPoint): number {
+  const startAxial = roundAxial(gridToAxial(start))
+  const endAxial = roundAxial(gridToAxial(end))
+  const deltaQ = endAxial.q - startAxial.q
+  const deltaR = endAxial.r - startAxial.r
+  const deltaS = -deltaQ - deltaR
+  return Math.max(Math.abs(deltaQ), Math.abs(deltaR), Math.abs(deltaS))
+}
+
 export const hexCorners = (center: GridPoint): readonly GridPoint[] =>
   Array.from({ length: 6 }, (_value, index) => {
     const angle = -Math.PI / 2 + (Math.PI / 3) * index

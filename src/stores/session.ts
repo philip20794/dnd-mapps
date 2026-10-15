@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { isCustomMap, parseMapDefinition } from '@/map-editor/mapEditor'
 import type { MapDefinition } from '@/maps/api'
 import { randomMapId } from '@/maps/randomGenerator'
 import { sessionPersistence } from '@/persistence/sessionPersistence'
@@ -15,22 +16,31 @@ interface SessionState {
   lastSavedAt: string | null
 }
 
-const cloneSerializable = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
+function cloneSerializable<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value))
+}
 
-const isStoredGeneratedMap = (value: unknown): value is MapDefinition =>
-  typeof value === 'object' &&
-  value !== null &&
-  (value as { readonly id?: unknown }).id === randomMapId &&
-  typeof (value as { readonly name?: unknown }).name === 'string' &&
-  typeof (value as { readonly width?: unknown }).width === 'number' &&
-  typeof (value as { readonly height?: unknown }).height === 'number' &&
-  typeof (value as { readonly gridSize?: unknown }).gridSize === 'number' &&
-  Array.isArray((value as { readonly objects?: unknown }).objects) &&
-  Array.isArray((value as { readonly walls?: unknown }).walls) &&
-  Array.isArray((value as { readonly doors?: unknown }).doors)
+function validatedStoredMap(value: unknown): MapDefinition | null {
+  try {
+    return parseMapDefinition(value)
+  } catch {
+    return null
+  }
+}
 
-const storedGeneratedMapsFromSnapshot = (snapshot: SessionSnapshot): readonly MapDefinition[] =>
-  Array.isArray(snapshot.generatedMaps) ? snapshot.generatedMaps.filter(isStoredGeneratedMap) : []
+function storedGeneratedMapsFromSnapshot(snapshot: SessionSnapshot): readonly MapDefinition[] {
+  if (!Array.isArray(snapshot.generatedMaps)) return []
+  return snapshot.generatedMaps
+    .map(validatedStoredMap)
+    .filter((map): map is MapDefinition => map?.id === randomMapId)
+}
+
+function storedCustomMapsFromSnapshot(snapshot: SessionSnapshot): readonly MapDefinition[] {
+  if (!Array.isArray(snapshot.customMaps)) return []
+  return snapshot.customMaps
+    .map(validatedStoredMap)
+    .filter((map): map is MapDefinition => map !== null && isCustomMap(map))
+}
 
 export const useSessionStore = defineStore('session', {
   state: (): SessionState => ({
@@ -51,6 +61,7 @@ export const useSessionStore = defineStore('session', {
         tokens: cloneSerializable(tokenStore.tokens),
         spellEffects: cloneSerializable(spellEffectStore.effects),
         generatedMaps: cloneSerializable(mapStore.maps.filter((map) => map.id === randomMapId)),
+        customMaps: cloneSerializable(mapStore.customMaps),
         doorStatesByMap: cloneSerializable(mapStore.doorStatesByMap),
         currentLevelByMap: cloneSerializable(mapStore.currentLevelByMap),
         fog: cloneSerializable(fogStore.$state),
@@ -83,6 +94,7 @@ export const useSessionStore = defineStore('session', {
         const spellEffectStore = useSpellEffectStore()
 
         mapStore.restoreGeneratedMaps(storedGeneratedMapsFromSnapshot(snapshot))
+        mapStore.restoreCustomMaps(storedCustomMapsFromSnapshot(snapshot))
         if (
           snapshot.selectedMapId &&
           mapStore.maps.some((map) => map.id === snapshot.selectedMapId)

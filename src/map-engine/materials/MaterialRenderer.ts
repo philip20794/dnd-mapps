@@ -16,9 +16,17 @@ export interface RenderedMaterialLayers {
   readonly chunkCount: number
   readonly updateVisibility: (bounds: MapViewBounds) => void
   readonly visibleChunkCount: () => number
+  readonly refreshChunks: (
+    layers: readonly MaterialLayerDefinition[],
+    mapWidth: number,
+    mapHeight: number,
+    gridSize: number,
+    dirtyChunks: ReadonlySet<string>,
+  ) => void
 }
 
 interface MaterialRuntimeChunk {
+  readonly key: string
   readonly minX: number
   readonly minY: number
   readonly maxX: number
@@ -268,17 +276,36 @@ const drawExplicitDecal = (
   const height = px(decal.height ?? 1, gridSize) * (decal.scale ?? 1)
   const color = decal.color ?? 0x2d241b
   const alpha = decal.alpha ?? 0.28
+  const rotation = decal.rotation ?? 0
+  const transform = (localX: number, localY: number): readonly [number, number] => {
+    const centeredX = localX - width / 2
+    const centeredY = localY - height / 2
+    return [
+      x + width / 2 + centeredX * Math.cos(rotation) - centeredY * Math.sin(rotation),
+      y + height / 2 + centeredX * Math.sin(rotation) + centeredY * Math.cos(rotation),
+    ]
+  }
   if (decal.kind === 'crack') {
+    const start = transform(0, height * 0.3)
+    const middle = transform(width * 0.46, height * 0.55)
+    const end = transform(width, height * 0.28)
     graphics
-      .moveTo(x, y + height * 0.3)
-      .lineTo(x + width * 0.46, y + height * 0.55)
-      .lineTo(x + width, y + height * 0.28)
+      .moveTo(start[0], start[1])
+      .lineTo(middle[0], middle[1])
+      .lineTo(end[0], end[1])
       .stroke({ color, alpha, width: Math.max(1, gridSize * 0.035) })
     return
   }
-  graphics
-    .ellipse(x + width / 2, y + height / 2, width / 2, Math.max(2, height / 2))
-    .fill({ color, alpha })
+  const points: number[] = []
+  for (let index = 0; index < 16; index += 1) {
+    const angle = (index / 16) * Math.PI * 2
+    const point = transform(
+      width / 2 + (Math.cos(angle) * width) / 2,
+      height / 2 + Math.sin(angle) * Math.max(2, height / 2),
+    )
+    points.push(point[0], point[1])
+  }
+  graphics.poly(points).fill({ color, alpha })
 }
 
 export class MaterialRenderer {
@@ -287,29 +314,49 @@ export class MaterialRenderer {
     mapWidth: number,
     mapHeight: number,
     gridSize: number,
+    onlyChunks?: ReadonlySet<string>,
   ): RenderedMaterialLayers {
     const base = new Container({ label: 'material-base-runtime' })
     const edges = new Container({ label: 'material-edges-runtime' })
     const decals = new Container({ label: 'material-decals-runtime' })
-    const runtimeChunks: MaterialRuntimeChunk[] = []
-    const compiledLayers = layers.map((layer) => ({
-      layer,
-      chunks: compileMaterialLayer(layer, mapWidth, mapHeight),
-    }))
+    let runtimeChunks: MaterialRuntimeChunk[] = []
+    const compiledLayers = layers.map((layer) => {
+      const allChunks = compileMaterialLayer(layer, mapWidth, mapHeight)
+      return {
+        layer,
+        allChunks,
+        chunks: allChunks.filter(
+          (chunk) => !onlyChunks || onlyChunks.has(`${layer.id}:${chunk.x},${chunk.y}`),
+        ),
+      }
+    })
     const chunkCount = compiledLayers.reduce((sum, entry) => sum + entry.chunks.length, 0)
     const cellCount = compiledLayers.reduce(
       (sum, entry) =>
-        sum + entry.chunks.reduce((chunkSum, chunk) => chunkSum + chunk.cells.length, 0),
+        sum + entry.allChunks.reduce((chunkSum, chunk) => chunkSum + chunk.cells.length, 0),
       0,
     )
     // RenderTexture creation has an up-front GPU cost. It pays off for normal maps, while large
     // maps are already cheap scene-graph-wise (three Graphics per chunk) and stay uncached.
-    const cacheBaseChunks = chunkCount <= 24
+    const totalChunkCount = compiledLayers.reduce((sum, entry) => sum + entry.allChunks.length, 0)
+    const cacheBaseChunks = totalChunkCount <= 24
     const patternStride = cellCount > 6_000 ? 4 : cellCount > 3_000 ? 2 : 1
     const decalStride = cellCount > 6_000 ? 5 : cellCount > 3_000 ? 3 : 1
 
     compiledLayers.forEach(({ layer, chunks }) => {
       chunks.forEach((chunk) => {
+        const renderedWidth = Math.max(
+          chunk.width,
+          ...chunk.decals.map(
+            (decal) => decal.position.x - chunk.x + (decal.width ?? 1) * (decal.scale ?? 1),
+          ),
+        )
+        const renderedHeight = Math.max(
+          chunk.height,
+          ...chunk.decals.map(
+            (decal) => decal.position.y - chunk.y + (decal.height ?? 1) * (decal.scale ?? 1),
+          ),
+        )
         const baseChunk = new Container({
           label: `material-base:${layer.id}:${chunk.x},${chunk.y}`,
         })
@@ -329,8 +376,8 @@ export class MaterialRenderer {
           container.cullArea = new Rectangle(
             0,
             0,
-            px(chunk.width, gridSize),
-            px(chunk.height, gridSize),
+            px(renderedWidth, gridSize),
+            px(renderedHeight, gridSize),
           )
         })
         const baseGraphics = new Graphics()
@@ -374,20 +421,23 @@ export class MaterialRenderer {
         edges.addChild(edgeChunk)
         decals.addChild(decalChunk)
         runtimeChunks.push({
+          key: `${layer.id}:${chunk.x},${chunk.y}`,
           minX: chunk.x,
           minY: chunk.y,
-          maxX: chunk.x + chunk.width,
-          maxY: chunk.y + chunk.height,
+          maxX: chunk.x + renderedWidth,
+          maxY: chunk.y + renderedHeight,
           containers: [baseChunk, edgeChunk, decalChunk],
           visible: true,
         })
       })
     })
-    return {
+    const rendered: RenderedMaterialLayers = {
       base,
       edges,
       decals,
-      chunkCount,
+      get chunkCount() {
+        return runtimeChunks.length
+      },
       updateVisibility: (bounds) => {
         runtimeChunks.forEach((chunk) => {
           chunk.visible = boundsIntersect(chunk, bounds)
@@ -397,6 +447,66 @@ export class MaterialRenderer {
         })
       },
       visibleChunkCount: () => runtimeChunks.filter((chunk) => chunk.visible).length,
+      refreshChunks: (nextLayers, nextWidth, nextHeight, nextGridSize, dirtyChunks) => {
+        if (dirtyChunks.size === 0) return
+        const partial = this.render(nextLayers, nextWidth, nextHeight, nextGridSize, dirtyChunks)
+        const replace = (target: Container, source: Container): void => {
+          for (const child of [...target.children]) {
+            const label = child.label ?? ''
+            if ([...dirtyChunks].some((key) => label.endsWith(key))) {
+              target.removeChild(child)
+              child.destroy({ children: true })
+            }
+          }
+          for (const child of [...source.children]) {
+            source.removeChild(child)
+            target.addChild(child)
+          }
+        }
+        replace(base, partial.base)
+        replace(edges, partial.edges)
+        replace(decals, partial.decals)
+        runtimeChunks = runtimeChunks.filter((chunk) => !dirtyChunks.has(chunk.key))
+        // Rebuild the runtime visibility metadata from the actual refreshed containers.
+        for (const layer of nextLayers) {
+          for (const chunk of compileMaterialLayer(layer, nextWidth, nextHeight)) {
+            const key = `${layer.id}:${chunk.x},${chunk.y}`
+            if (!dirtyChunks.has(key)) continue
+            const containers = [
+              base.getChildByLabel(`material-base:${key}`),
+              edges.getChildByLabel(`material-edge:${key}`),
+              decals.getChildByLabel(`material-decal:${key}`),
+            ].filter((entry): entry is Container => entry instanceof Container)
+            if (containers.length === 3) {
+              const renderedWidth = Math.max(
+                chunk.width,
+                ...chunk.decals.map(
+                  (decal) => decal.position.x - chunk.x + (decal.width ?? 1) * (decal.scale ?? 1),
+                ),
+              )
+              const renderedHeight = Math.max(
+                chunk.height,
+                ...chunk.decals.map(
+                  (decal) => decal.position.y - chunk.y + (decal.height ?? 1) * (decal.scale ?? 1),
+                ),
+              )
+              runtimeChunks.push({
+                key,
+                minX: chunk.x,
+                minY: chunk.y,
+                maxX: chunk.x + renderedWidth,
+                maxY: chunk.y + renderedHeight,
+                containers,
+                visible: true,
+              })
+            }
+          }
+        }
+        partial.base.destroy()
+        partial.edges.destroy()
+        partial.decals.destroy()
+      },
     }
+    return rendered
   }
 }

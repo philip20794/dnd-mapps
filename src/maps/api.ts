@@ -55,6 +55,14 @@ export interface MapDefinition {
   readonly startTokens?: readonly PlacedToken[]
   /** Serializable provenance for generated maps; fixed maps deliberately omit it. */
   readonly generation?: MapGenerationMetadata
+  /** Metadata for user-owned copies. Source maps never receive this field. */
+  readonly editor?: MapEditorMetadata
+}
+
+export interface MapEditorMetadata {
+  readonly schemaVersion: 1
+  readonly sourceMapId: string
+  readonly updatedAt: string
 }
 
 export interface MapGenerationMetadata {

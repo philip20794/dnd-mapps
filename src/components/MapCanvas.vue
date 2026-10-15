@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SpellRadialMenu from '@/components/SpellRadialMenu.vue'
 import TokenContextMenu from '@/components/TokenContextMenu.vue'
 import { MapEngine, type EngineFogState } from '@/map-engine/MapEngine'
@@ -9,7 +9,9 @@ import type { RuntimeSettings } from '@/types/settings'
 import type { PlacedSpellEffect, SpellEffectPatch, SpellPlacement } from '@/types/spells'
 import type { PlacedToken, QuickTokenCreation, TokenPatch, TokenTemplate } from '@/types/tokens'
 import type { VerticalTransitionConfig } from '@/map-objects'
-import type { ExplorationMask } from '@/map-engine/fog/fogState'
+import type { ExplorationMask, FogVisibilityMode } from '@/map-engine/fog/fogState'
+import type { MapEditorSelection, MapEditorState } from '@/map-editor/types'
+import type { MapObjectDefinition } from '@/map-objects'
 
 const props = defineProps<{
   map: MapDefinition | null
@@ -17,6 +19,7 @@ const props = defineProps<{
   tokens: readonly PlacedToken[]
   selectedTokenId: string | null
   tokenPlacementTemplate: TokenTemplate | null
+  duplicateTokenPlacement?: PlacedToken | null
   spellEffects: readonly PlacedSpellEffect[]
   selectedSpellEffectId: string | null
   spellPlacement: SpellPlacement | null
@@ -24,17 +27,23 @@ const props = defineProps<{
   settings: RuntimeSettings
   fogEnabled: boolean
   persistExploration: boolean
+  fogVisibilityMode: FogVisibilityMode
   exploredMask: ExplorationMask | null
+  editorMode?: boolean
+  editorState?: MapEditorState
 }>()
 
 const emit = defineEmits<{
   dropToken: [kind: string, position: GridPoint]
+  placeTokenDuplicate: [sourceId: string, position: GridPoint]
+  beginTokenDuplicate: [sourceId: string]
   createQuickToken: [creation: QuickTokenCreation, position: GridPoint]
   cancelTokenPlacement: []
   selectToken: [tokenId: string | null]
   moveToken: [tokenId: string, position: GridPoint]
   updateToken: [tokenId: string, patch: TokenPatch]
   deleteToken: [tokenId: string]
+  focusTokenVisibility: [tokenId: string]
   beginSpellPlacement: [casterTokenId: string, presetId: string]
   beginFreeSpellPlacement: [presetId: string, origin: GridPoint]
   placeSpell: [placement: SpellPlacement, target: GridPoint]
@@ -45,9 +54,13 @@ const emit = defineEmits<{
   toggleDoor: [doorId: string]
   levelTransition: [transition: VerticalTransitionConfig, sourceObjectId: string]
   cameraChange: [camera: RuntimeSettings['camera']]
+  mapRotationChange: [rotation: RuntimeSettings['mapRotation']]
   viewportChange: [viewport: { readonly width: number; readonly height: number }]
   explore: [mapId: string, levelId: string, polygons: readonly Polygon[]]
   error: [message: string]
+  editorSelect: [selection: MapEditorSelection | null]
+  editorCommit: [map: MapDefinition, selection: MapEditorSelection | null]
+  editorPlaceObject: [template: Pick<MapObjectDefinition, 'type' | 'preset'>, position: GridPoint]
 }>()
 
 const host = ref<HTMLElement | null>(null)
@@ -76,17 +89,50 @@ const tokenPlacementPreview = ref<{
   readonly position: GridPoint
   readonly screen: { readonly x: number; readonly y: number }
 } | null>(null)
+const tokenRename = ref<{
+  readonly tokenId: string
+  readonly screen: { readonly x: number; readonly y: number }
+  value: string
+} | null>(null)
+const tokenRenameInput = ref<HTMLInputElement | null>(null)
+const tokenRenameForm = ref<HTMLFormElement | null>(null)
+const canvasViewport = ref({ width: 0, height: 0 })
+const tokenRenameSize = ref({ width: 224, height: 78 })
+const tokenPlacementAppearance = computed(() => {
+  const duplicate = props.duplicateTokenPlacement
+  if (duplicate) {
+    return { name: duplicate.name, color: duplicate.color, symbol: duplicate.symbol }
+  }
+  const template = props.tokenPlacementTemplate
+  return template ? { name: template.name, color: template.color, symbol: template.symbol } : null
+})
+const tokenRenamePosition = computed(() => {
+  const rename = tokenRename.value
+  if (!rename) return { left: 0, top: 0 }
+  const width = Math.min(tokenRenameSize.value.width, Math.max(0, canvasViewport.value.width - 16))
+  const height = Math.min(
+    tokenRenameSize.value.height,
+    Math.max(0, canvasViewport.value.height - 16),
+  )
+  return {
+    left: Math.max(8, Math.min(rename.screen.x + 12, canvasViewport.value.width - width - 8)),
+    top: Math.max(8, Math.min(rename.screen.y + 12, canvasViewport.value.height - height - 8)),
+  }
+})
 let engine: MapEngine | null = null
 let resizeObserver: ResizeObserver | null = null
 
 const engineFogState = computed<EngineFogState>(() => ({
   enabled: props.fogEnabled,
   persistExploration: props.persistExploration,
+  visibilityMode: props.fogVisibilityMode,
   explored: props.exploredMask,
 }))
 
 const syncMap = (): void => {
   if (engine && props.map && props.levelId) {
+    engine.setInteractionMode(props.editorMode ? 'map-editor' : 'play')
+    if (props.editorState) engine.setEditorState(props.editorState)
     engine.setMap(props.map, props.doorStates, props.levelId)
     engine.setTokens(props.tokens, props.selectedTokenId)
     engine.setSpellEffects(props.spellEffects, props.selectedSpellEffectId)
@@ -102,6 +148,7 @@ const emitViewport = (): void => {
   }
 
   const bounds = host.value.getBoundingClientRect()
+  canvasViewport.value = { width: bounds.width, height: bounds.height }
   if (bounds.width > 0 && bounds.height > 0) {
     emit('viewportChange', { width: bounds.width, height: bounds.height })
   }
@@ -130,6 +177,7 @@ onMounted(async () => {
         y: screenPoint.y,
       }
     },
+    onTokenRenameRequest: (tokenId, screenPoint) => startTokenRename(tokenId, screenPoint),
     onMapLongPress: (position, screenPoint) => {
       if (!host.value) return
       spellMenu.value = {
@@ -154,8 +202,11 @@ onMounted(async () => {
     onLevelTransition: (transition, sourceObjectId) =>
       emit('levelTransition', transition, sourceObjectId),
     onCameraChange: (camera) => emit('cameraChange', camera),
+    onMapRotationChange: (rotation) => emit('mapRotationChange', rotation),
     onExplore: (mapId, levelId, polygons) => emit('explore', mapId, levelId, polygons),
     onError: (message) => emit('error', message),
+    onEditorSelect: (selection) => emit('editorSelect', selection),
+    onEditorCommit: (map, selection) => emit('editorCommit', map, selection),
   })
   await engine.init()
   syncMap()
@@ -171,8 +222,27 @@ watch(
   () => {
     spellMenu.value.open = false
     tokenContextMenu.value.open = false
+    tokenRename.value = null
     syncMap()
   },
+)
+
+watch(
+  () => props.editorMode,
+  (editorMode) => {
+    spellMenu.value.open = false
+    tokenContextMenu.value.open = false
+    tokenRename.value = null
+    engine?.setInteractionMode(editorMode ? 'map-editor' : 'play')
+  },
+)
+
+watch(
+  () => props.editorState,
+  (state) => {
+    if (state) engine?.setEditorState(state)
+  },
+  { deep: true },
 )
 
 watch(
@@ -180,11 +250,17 @@ watch(
   () => {
     engine?.setTokens(props.tokens, props.selectedTokenId)
     if (tokenContextMenu.value.tokenId && !contextToken.value) tokenContextMenu.value.open = false
+    if (
+      tokenRename.value &&
+      !props.tokens.some((token) => token.id === tokenRename.value?.tokenId)
+    ) {
+      tokenRename.value = null
+    }
   },
 )
 
 watch(
-  () => props.tokenPlacementTemplate,
+  () => [props.tokenPlacementTemplate, props.duplicateTokenPlacement],
   () => {
     tokenPlacementPreview.value = null
   },
@@ -219,6 +295,7 @@ watch(
   (levelId) => {
     spellMenu.value.open = false
     tokenContextMenu.value.open = false
+    tokenRename.value = null
     if (levelId) {
       engine?.setLevel(levelId)
     }
@@ -253,6 +330,13 @@ onBeforeUnmount(() => {
 })
 
 const handleDragOver = (event: DragEvent): void => {
+  if (props.editorMode) {
+    if (event.dataTransfer?.types.includes('application/x-map-object-preset')) {
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+    }
+    return
+  }
   event.preventDefault()
   if (event.dataTransfer) {
     event.dataTransfer.dropEffect = 'copy'
@@ -260,6 +344,20 @@ const handleDragOver = (event: DragEvent): void => {
 }
 
 const handleDrop = (event: DragEvent): void => {
+  if (props.editorMode) {
+    const serialized = event.dataTransfer?.getData('application/x-map-object-preset')
+    const position = engine?.clientToGrid(event.clientX, event.clientY)
+    if (serialized && position) {
+      event.preventDefault()
+      try {
+        const template = JSON.parse(serialized) as Pick<MapObjectDefinition, 'type' | 'preset'>
+        if (typeof template.type === 'string') emit('editorPlaceObject', template, position)
+      } catch {
+        emit('error', 'Das Kartenobjekt konnte nicht platziert werden.')
+      }
+    }
+    return
+  }
   event.preventDefault()
   const kind =
     event.dataTransfer?.getData('application/x-token-kind') ||
@@ -271,7 +369,7 @@ const handleDrop = (event: DragEvent): void => {
 }
 
 const updateTokenPlacementPreview = (event: PointerEvent): void => {
-  if (!props.tokenPlacementTemplate || !host.value) {
+  if (!tokenPlacementAppearance.value || !host.value) {
     tokenPlacementPreview.value = null
     return
   }
@@ -290,9 +388,13 @@ const placeTokenFromTemplate = (event: PointerEvent): void => {
   event.stopPropagation()
   updateTokenPlacementPreview(event)
   const template = props.tokenPlacementTemplate
+  const duplicate = props.duplicateTokenPlacement
   const preview = tokenPlacementPreview.value
   if (template && preview) {
     emit('dropToken', template.kind, preview.position)
+    emit('cancelTokenPlacement')
+  } else if (duplicate && preview) {
+    emit('placeTokenDuplicate', duplicate.id, preview.position)
     emit('cancelTokenPlacement')
   }
 }
@@ -364,10 +466,53 @@ const deleteContextToken = (tokenId: string): void => {
   tokenContextMenu.value.open = false
   emit('deleteToken', tokenId)
 }
+
+function focusContextTokenVisibility(tokenId: string): void {
+  tokenContextMenu.value.open = false
+  emit('focusTokenVisibility', tokenId)
+}
+
+const startTokenRename = (
+  tokenId: string,
+  screenPoint: { readonly x: number; readonly y: number },
+): void => {
+  const token = props.tokens.find((entry) => entry.id === tokenId)
+  if (!token) return
+  spellMenu.value.open = false
+  tokenContextMenu.value.open = false
+  tokenRename.value = { tokenId, screen: screenPoint, value: token.name }
+  void nextTick(() => {
+    const bounds = tokenRenameForm.value?.getBoundingClientRect()
+    if (bounds) tokenRenameSize.value = { width: bounds.width, height: bounds.height }
+    tokenRenameInput.value?.focus()
+    tokenRenameInput.value?.select()
+  })
+}
+
+const renameContextToken = (tokenId: string): void => {
+  startTokenRename(tokenId, { x: tokenContextMenu.value.x, y: tokenContextMenu.value.y })
+}
+
+const beginDuplicateToken = (tokenId: string): void => {
+  tokenContextMenu.value.open = false
+  emit('beginTokenDuplicate', tokenId)
+}
+
+const commitTokenRename = (): void => {
+  const rename = tokenRename.value
+  if (!rename) return
+  const name = rename.value.trim()
+  if (name) emit('updateToken', rename.tokenId, { name })
+  tokenRename.value = null
+}
+
+const cancelTokenRename = (): void => {
+  tokenRename.value = null
+}
 </script>
 
 <template>
-  <main class="canvas-shell">
+  <main class="canvas-shell" :class="{ 'map-editor-canvas': editorMode }">
     <div
       ref="host"
       class="map-canvas"
@@ -377,7 +522,7 @@ const deleteContextToken = (tokenId: string): void => {
       @drop="handleDrop"
     />
     <div
-      v-if="tokenPlacementTemplate"
+      v-if="tokenPlacementAppearance && !editorMode"
       class="token-placement-overlay"
       data-testid="token-placement-overlay"
       @pointermove="updateTokenPlacementPreview"
@@ -390,26 +535,34 @@ const deleteContextToken = (tokenId: string): void => {
         :style="{
           left: `${tokenPlacementPreview.screen.x}px`,
           top: `${tokenPlacementPreview.screen.y}px`,
-          backgroundColor: tokenPlacementTemplate.color,
+          backgroundColor: tokenPlacementAppearance.color,
         }"
         aria-hidden="true"
       >
-        {{ tokenPlacementTemplate.symbol }}
+        {{ tokenPlacementAppearance.symbol }}
       </div>
     </div>
     <div
-      v-if="tokenPlacementTemplate"
+      v-if="tokenPlacementAppearance && !editorMode"
       class="token-placement-banner"
       data-testid="token-placement-banner"
     >
-      <span>{{ tokenPlacementTemplate.name }}: Position auf der Karte antippen</span>
+      <span>{{ tokenPlacementAppearance.name }}: Position auf der Karte antippen</span>
       <button type="button" @click="cancelTokenPlacement">Abbrechen</button>
     </div>
-    <div v-if="spellPlacement" class="spell-placement-banner" data-testid="spell-placement-banner">
+    <div
+      v-if="spellPlacement && !editorMode"
+      class="spell-placement-banner"
+      data-testid="spell-placement-banner"
+    >
       Position für die Form anklicken
       <button type="button" @click="emit('cancelSpellPlacement')">Abbrechen</button>
     </div>
-    <div v-if="editingSpellEffectId" class="spell-edit-banner" data-testid="spell-edit-banner">
+    <div
+      v-if="editingSpellEffectId && !editorMode"
+      class="spell-edit-banner"
+      data-testid="spell-edit-banner"
+    >
       <span>Flächenform bearbeiten</span>
       <button type="button" data-testid="finish-spell-edit" @click="finishSpellEffectEditing">
         Fertig
@@ -425,7 +578,7 @@ const deleteContextToken = (tokenId: string): void => {
       </button>
     </div>
     <div
-      v-if="spellEffectDragging"
+      v-if="spellEffectDragging && !editorMode"
       class="spell-trash-target"
       data-testid="spell-trash-target"
       aria-label="Fläche hierher ziehen, um sie zu entfernen"
@@ -434,7 +587,7 @@ const deleteContextToken = (tokenId: string): void => {
       <strong>Hierher ziehen</strong>
     </div>
     <SpellRadialMenu
-      :open="spellMenu.open"
+      :open="spellMenu.open && !editorMode"
       :context-label="spellMenu.context?.label ?? ''"
       :token-creation-enabled="spellMenu.context?.kind === 'free'"
       :x="spellMenu.x"
@@ -444,16 +597,44 @@ const deleteContextToken = (tokenId: string): void => {
       @close="spellMenu.open = false"
     />
     <TokenContextMenu
-      :open="tokenContextMenu.open"
+      :open="tokenContextMenu.open && !editorMode"
       :token="contextToken"
       :x="tokenContextMenu.x"
       :y="tokenContextMenu.y"
       @update-color="updateContextTokenColor"
       @update-vision-range="updateContextTokenVisionRange"
       @update-vision-enabled="updateContextTokenVisionEnabled"
+      @update-token="updateContextToken"
+      @rename-token="renameContextToken"
+      @duplicate-token="beginDuplicateToken"
+      @focus-visibility="focusContextTokenVisibility"
       @create-spell="createSpellFromTokenContext"
       @delete-token="deleteContextToken"
       @close="tokenContextMenu.open = false"
     />
+    <form
+      v-if="tokenRename && !editorMode"
+      ref="tokenRenameForm"
+      class="token-rename-inline"
+      :style="{ left: `${tokenRenamePosition.left}px`, top: `${tokenRenamePosition.top}px` }"
+      data-testid="token-rename-inline"
+      @submit.prevent="commitTokenRename"
+      @pointerdown.stop
+    >
+      <label>
+        Tokenname
+        <input
+          ref="tokenRenameInput"
+          v-model="tokenRename.value"
+          data-testid="token-rename-input"
+          type="text"
+          enterkeyhint="done"
+          autocomplete="off"
+          @keydown.esc.prevent="cancelTokenRename"
+        />
+      </label>
+      <button type="submit" data-testid="token-rename-confirm">Speichern</button>
+      <button type="button" @click="cancelTokenRename">Abbrechen</button>
+    </form>
   </main>
 </template>

@@ -1,6 +1,7 @@
 import type { CameraState } from '@/types/settings'
 import { normalizeMapRotation, type MapRotation } from '@/types/settings'
 import type { PixelPoint } from '@/types/geometry'
+import { rotateWorldPoint, screenToWorld } from '../grid/coordinates'
 
 export const MIN_ZOOM = 0.2
 export const MAX_ZOOM = 2.8
@@ -45,6 +46,22 @@ export const transformCameraByGesture = (
     x: nextCenter.x - anchoredPoint.x * nextZoom,
     y: nextCenter.y - anchoredPoint.y * nextZoom,
     zoom: nextZoom,
+  }
+}
+
+export const rotateCameraAt = (
+  camera: CameraState,
+  screenPoint: PixelPoint,
+  mapPixelSize: PixelPoint,
+  previousRotation: MapRotation,
+  nextRotation: MapRotation,
+): CameraState => {
+  const anchoredWorldPoint = screenToWorld(screenPoint, camera, previousRotation, mapPixelSize)
+  const rotatedAnchor = rotateWorldPoint(anchoredWorldPoint, mapPixelSize, nextRotation)
+  return {
+    x: screenPoint.x - rotatedAnchor.x * camera.zoom,
+    y: screenPoint.y - rotatedAnchor.y * camera.zoom,
+    zoom: camera.zoom,
   }
 }
 

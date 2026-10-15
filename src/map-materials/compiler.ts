@@ -113,6 +113,15 @@ export const compileMaterialLayer = (
     chunks.set(chunkKey, chunk)
   }
 
+  // Explicit decals may live on an otherwise empty editor layer. Give every touched decal chunk
+  // a runtime entry so decals never depend on an underlying painted area in the same layer.
+  for (const decal of layer.decals ?? []) {
+    const chunkX = Math.floor(Math.max(0, decal.position.x) / chunkSize) * chunkSize
+    const chunkY = Math.floor(Math.max(0, decal.position.y) / chunkSize) * chunkSize
+    const chunkKey = key(chunkX, chunkY)
+    if (!chunks.has(chunkKey)) chunks.set(chunkKey, { x: chunkX, y: chunkY, cells: [] })
+  }
+
   return [...chunks.values()]
     .sort((left, right) => left.y - right.y || left.x - right.x)
     .map((chunk) => ({
@@ -121,10 +130,8 @@ export const compileMaterialLayer = (
       height: Math.min(chunkSize, mapHeight - chunk.y),
       decals: (layer.decals ?? []).filter(
         (decal) =>
-          decal.position.x + (decal.width ?? 1) > chunk.x &&
-          decal.position.y + (decal.height ?? 1) > chunk.y &&
-          decal.position.x < chunk.x + chunkSize &&
-          decal.position.y < chunk.y + chunkSize,
+          Math.floor(Math.max(0, decal.position.x) / chunkSize) * chunkSize === chunk.x &&
+          Math.floor(Math.max(0, decal.position.y) / chunkSize) * chunkSize === chunk.y,
       ),
     }))
 }

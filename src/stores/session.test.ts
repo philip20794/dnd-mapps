@@ -5,6 +5,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { loadMapDefinitions } from '@/maps/loader'
 import { createRandomMap, randomMapId } from '@/maps/randomGenerator'
 import { mapGenerationService } from '@/map-generation/service'
+import { createEditableMapCopy } from '@/map-editor/mapEditor'
 import { sessionPersistence } from '@/persistence/sessionPersistence'
 import { useFogStore } from './fog'
 import { useMapStore } from './map'
@@ -48,6 +49,7 @@ describe('Session Store', () => {
     ])
     fogStore.setEnabled(true)
     fogStore.setPersistExploration(false)
+    fogStore.setVisibilityMode({ kind: 'player', tokenId: 'token-a' })
 
     const snapshot = sessionStore.snapshot()
 
@@ -56,7 +58,20 @@ describe('Session Store', () => {
     expect(snapshot.generatedMaps).toHaveLength(1)
     expect(snapshot.generatedMaps?.[0]?.id).toBe(randomMapId)
     expect(snapshot.fog.persistExploration).toBe(false)
+    expect(snapshot.fog.visibilityMode).toEqual({ kind: 'player', tokenId: 'token-a' })
     expect(() => JSON.stringify(snapshot)).not.toThrow()
+  })
+
+  it('stellt den gewählten Sichtmodus aus IndexedDB wieder her', async () => {
+    const fogStore = useFogStore()
+    fogStore.setEnabled(true)
+    fogStore.setVisibilityMode({ kind: 'player', tokenId: 'player-view' })
+    await useSessionStore().save()
+
+    setActivePinia(createPinia())
+    await expect(useSessionStore().restore()).resolves.toBe(true)
+
+    expect(useFogStore().visibilityMode).toEqual({ kind: 'player', tokenId: 'player-view' })
   })
 
   it('stellt die letzte Zufallskarte aus der gespeicherten Sitzung wieder her', async () => {
@@ -79,6 +94,38 @@ describe('Session Store', () => {
     expect(restoredMap?.name).toBe(generatedMap.name)
     expect(restoredMap?.objects).toHaveLength(generatedMap.objects.length)
     expect(restoredMapStore.selectedMapId).toBe(randomMapId)
+  })
+
+  it('stores and restores multiple custom maps independently from source maps', async () => {
+    const sourceMaps = loadMapDefinitions()
+    const firstSource = sourceMaps[0]
+    const secondSource = sourceMaps[1]
+    expect(firstSource).toBeDefined()
+    expect(secondSource).toBeDefined()
+    if (!firstSource || !secondSource) return
+
+    const mapStore = useMapStore()
+    mapStore.setMaps(sourceMaps)
+    const existingIds = new Set(sourceMaps.map((map) => map.id))
+    const first = createEditableMapCopy(firstSource, existingIds, undefined, () => 'custom-one')
+    existingIds.add(first.id)
+    const second = createEditableMapCopy(secondSource, existingIds, undefined, () => 'custom-two')
+    mapStore.upsertCustomMap(first)
+    mapStore.upsertCustomMap(second)
+    mapStore.setCurrentLevel(second.id, second.levels?.[0]?.id ?? 'ground')
+    await useSessionStore().save()
+
+    setActivePinia(createPinia())
+    const restoredMapStore = useMapStore()
+    restoredMapStore.setMaps(sourceMaps)
+    await expect(useSessionStore().restore()).resolves.toBe(true)
+
+    expect(restoredMapStore.customMaps.map((map) => map.id).sort()).toEqual([
+      'custom-one',
+      'custom-two',
+    ])
+    expect(restoredMapStore.selectedMapId).toBe('custom-two')
+    expect(restoredMapStore.maps.find((map) => map.id === firstSource.id)).toEqual(firstSource)
   })
 
   it('stellt frei platzierte Spieler und Gegner einschließlich ihrer Sichtwerte wieder her', async () => {
@@ -119,7 +166,26 @@ describe('Session Store', () => {
     ])
   })
 
-  it('bewahrt Plan und Seed einer über die Pipeline erzeugten Karte im Snapshot', async () => {
+  it('persists duplicate token names after restore', async () => {
+    const tokenStore = useTokenStore()
+    const sessionStore = useSessionStore()
+    const source = tokenStore.addTokenFromTemplate('goblin', 'alte-krypta', { x: 2, y: 3 }, 'ground')
+    const duplicate = tokenStore.duplicateToken(source.id, 'alte-krypta', { x: 5, y: 6 }, 'ground')
+    expect(duplicate).not.toBeNull()
+    await sessionStore.save()
+
+    setActivePinia(createPinia())
+    await expect(useSessionStore().restore()).resolves.toBe(true)
+
+    expect(useTokenStore().tokens).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: source.id, name: 'Goblin 1', position: { x: 2, y: 3 } }),
+        expect.objectContaining({ id: duplicate?.id, name: 'Goblin 2', position: { x: 5, y: 6 } }),
+      ]),
+    )
+  })
+
+  it('preserves generated map plan and seed in the snapshot', async () => {
     const generated = await mapGenerationService.generate({ seed: 987, mapType: 'cave' })
     const mapStore = useMapStore()
     const sessionStore = useSessionStore()

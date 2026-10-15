@@ -7,7 +7,9 @@ import {
   zoomCameraAt,
 } from '@/map-engine/camera/camera'
 import {
+  axialToGrid,
   gridToPixels,
+  hexDistanceBetweenGridPoints,
   hexCorners,
   hexCentersForRegion,
   hexRadiusInGridUnits,
@@ -37,6 +39,17 @@ describe('Raster- und Kamera-Koordinaten', () => {
     expect(corners).toHaveLength(6)
     expect(corners[0]?.x).toBeCloseTo(2)
     expect(corners[0]?.y).toBeCloseTo(3 - hexRadiusInGridUnits)
+  })
+
+  it('berechnet direkte Hex-Distanzen über Axial-/Cube-Koordinaten', () => {
+    const origin = axialToGrid({ q: 0, r: 0 })
+    const threeHexesAway = axialToGrid({ q: 3, r: -1 })
+    const fiveHexesAway = axialToGrid({ q: 2, r: 3 })
+
+    expect(hexDistanceBetweenGridPoints(origin, origin)).toBe(0)
+    expect(hexDistanceBetweenGridPoints(origin, threeHexesAway)).toBe(3)
+    expect(hexDistanceBetweenGridPoints(origin, fiveHexesAway)).toBe(5)
+    expect(hexDistanceBetweenGridPoints(fiveHexesAway, origin)).toBe(5)
   })
 
   it('begrenzt Hex-Abfragen auf einen lokalen Bereich großer Karten', () => {

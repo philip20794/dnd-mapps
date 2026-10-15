@@ -4,7 +4,9 @@ import {
   defaultFogState,
   isExploredCell,
   migrateFogState,
+  normalizeFogVisibilityMode,
   recordExploration,
+  resolveFogVisibilityTokens,
   visibleAndExploredPolygons,
 } from './fogState'
 
@@ -84,5 +86,37 @@ describe('Fog of War Zustand', () => {
     const result = visibleAndExploredPolygons(state, 'map:ground', [square(2)])
     expect(result.visible).toHaveLength(1)
     expect(result.explored?.cellCount).toBe(4)
+  })
+
+  it('filtert die Anzeige auf genau den gewählten Spieler', () => {
+    const tokens = [
+      { id: 'player-a', category: 'player' },
+      { id: 'player-b', category: 'player' },
+      { id: 'monster', category: 'monster' },
+    ]
+
+    expect(
+      resolveFogVisibilityTokens(tokens, { kind: 'player', tokenId: 'player-b' }),
+    ).toEqual([{ id: 'player-b', category: 'player' }])
+    expect(resolveFogVisibilityTokens(tokens, { kind: 'shared' })).toBe(tokens)
+  })
+
+  it('fällt bei fehlendem Spieler auf gemeinsame Sicht zurück', () => {
+    const mode = { kind: 'player', tokenId: 'player-a' } as const
+    expect(normalizeFogVisibilityMode(mode, [{ id: 'player-a', category: 'player' }])).toBe(mode)
+    expect(normalizeFogVisibilityMode(mode, [])).toEqual({ kind: 'shared' })
+    expect(normalizeFogVisibilityMode(mode, [{ id: 'player-a', category: 'monster' }])).toEqual({
+      kind: 'shared',
+    })
+  })
+
+  it('migriert alte Sitzungen auf gemeinsame Sicht und erhält gültige Einzelsicht', () => {
+    expect(migrateFogState({ enabled: true }).visibilityMode).toEqual({ kind: 'shared' })
+    expect(
+      migrateFogState({
+        enabled: true,
+        visibilityMode: { kind: 'player', tokenId: 'player-a' },
+      }).visibilityMode,
+    ).toEqual({ kind: 'player', tokenId: 'player-a' })
   })
 })

@@ -10,15 +10,28 @@ export interface ExplorationMask {
   readonly rows: Readonly<Record<string, readonly number[]>>
 }
 
+export type FogVisibilityMode =
+  | { readonly kind: 'shared' }
+  | { readonly kind: 'player'; readonly tokenId: string }
+
+export const sharedFogVisibilityMode: FogVisibilityMode = { kind: 'shared' }
+
+interface FogVisibilityToken {
+  readonly id: string
+  readonly category: string
+}
+
 export interface FogStateData {
   enabled: boolean
   persistExploration: boolean
+  visibilityMode: FogVisibilityMode
   exploredMasksByMap: Record<string, ExplorationMask>
 }
 
 interface LegacyFogStateData {
   readonly enabled?: unknown
   readonly persistExploration?: unknown
+  readonly visibilityMode?: unknown
   readonly exploredByMap?: unknown
   readonly exploredMasksByMap?: unknown
 }
@@ -26,7 +39,33 @@ interface LegacyFogStateData {
 export const defaultFogState: FogStateData = {
   enabled: false,
   persistExploration: true,
+  visibilityMode: sharedFogVisibilityMode,
   exploredMasksByMap: {},
+}
+
+export function isSharedFogVisibility(mode: FogVisibilityMode): boolean {
+  return mode.kind === 'shared'
+}
+
+export function resolveFogVisibilityTokens<T extends FogVisibilityToken>(
+  tokens: readonly T[],
+  mode: FogVisibilityMode,
+): readonly T[] {
+  if (mode.kind === 'shared') return tokens
+  return tokens.filter((token) => token.id === mode.tokenId && token.category === 'player')
+}
+
+export function normalizeFogVisibilityMode(
+  mode: FogVisibilityMode,
+  availablePlayers: readonly FogVisibilityToken[],
+): FogVisibilityMode {
+  if (
+    mode.kind === 'player' &&
+    availablePlayers.some((token) => token.id === mode.tokenId && token.category === 'player')
+  ) {
+    return mode
+  }
+  return sharedFogVisibilityMode
 }
 
 export function createEmptyExplorationMask(): ExplorationMask {
@@ -200,6 +239,15 @@ function isExplorationMask(value: unknown): value is ExplorationMask {
   )
 }
 
+function migrateVisibilityMode(value: unknown): FogVisibilityMode {
+  if (!value || typeof value !== 'object') return sharedFogVisibilityMode
+  const candidate = value as { readonly kind?: unknown; readonly tokenId?: unknown }
+  if (candidate.kind === 'player' && typeof candidate.tokenId === 'string' && candidate.tokenId) {
+    return { kind: 'player', tokenId: candidate.tokenId }
+  }
+  return sharedFogVisibilityMode
+}
+
 export function migrateFogState(value: unknown): FogStateData {
   const candidate = (value && typeof value === 'object' ? value : {}) as LegacyFogStateData
   const masks: Record<string, ExplorationMask> = {}
@@ -223,6 +271,7 @@ export function migrateFogState(value: unknown): FogStateData {
       typeof candidate.persistExploration === 'boolean'
         ? candidate.persistExploration
         : defaultFogState.persistExploration,
+    visibilityMode: migrateVisibilityMode(candidate.visibilityMode),
     exploredMasksByMap: masks,
   }
 }

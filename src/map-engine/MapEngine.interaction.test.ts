@@ -68,6 +68,7 @@ function handlers() {
     onDoorToggle: vi.fn<MapEngineHandlers['onDoorToggle']>(),
     onLevelTransition: vi.fn<MapEngineHandlers['onLevelTransition']>(),
     onCameraChange: vi.fn<MapEngineHandlers['onCameraChange']>(),
+    onMapRotationChange: vi.fn<NonNullable<MapEngineHandlers['onMapRotationChange']>>(),
     onExplore: vi.fn<MapEngineHandlers['onExplore']>(),
     onError: vi.fn<MapEngineHandlers['onError']>(),
   } satisfies MapEngineHandlers
@@ -377,8 +378,8 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
 
     invokePointerHandler(engine, 'handlePointerMove', pointerEvent(40, 112, 100, 'touch'))
     Reflect.get(engine, 'flushTouchCameraUpdate').call(engine)
-    expect(Reflect.get(engine, 'settings').camera.x).toBe(initialCamera.x + 5)
-    expect(callbacks.onCameraChange).toHaveBeenCalledOnce()
+    expect(Reflect.get(engine, 'settings').camera).toEqual(initialCamera)
+    expect(callbacks.onCameraChange).not.toHaveBeenCalled()
     invokePointerHandler(engine, 'handlePointerUp', pointerEvent(40, 112, 100, 'touch'))
     engine.destroy()
   })
@@ -410,6 +411,44 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
     engine.destroy()
   })
 
+  it('behält Zwei-Finger-Kameragesten im Karteneditor bei', () => {
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    engine.setMap(map, {})
+    engine.setInteractionMode('map-editor')
+    engine.setEditorState({ tool: 'select', selection: null, snap: true, objectTemplate: null })
+    const initialCamera = Reflect.get(engine, 'settings').camera
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(54, 100, 100, 'touch'))
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(55, 200, 100, 'touch'))
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(54, 90, 120, 'touch'))
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(55, 240, 120, 'touch'))
+    Reflect.get(engine, 'flushTouchCameraUpdate').call(engine)
+
+    expect(Reflect.get(engine, 'settings').camera.zoom).toBeGreaterThan(initialCamera.zoom)
+    expect(callbacks.onCameraChange).toHaveBeenCalled()
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(55, 240, 120, 'touch'))
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(54, 90, 120, 'touch'))
+    engine.destroy()
+  })
+
+  it('rotates the map with a two-finger twist gesture', () => {
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    engine.setMap(map, {})
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(52, 100, 100, 'touch'))
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(53, 200, 100, 'touch'))
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(53, 100, 200, 'touch'))
+    Reflect.get(engine, 'flushTouchCameraUpdate').call(engine)
+
+    expect(Reflect.get(engine, 'settings').mapRotation).toBe(90)
+    expect(callbacks.onMapRotationChange).toHaveBeenCalledWith(90)
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(53, 100, 200, 'touch'))
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(52, 100, 100, 'touch'))
+    engine.destroy()
+  })
+
   it('übernimmt einen laufenden Token-Drag nicht als Touch-Kamerageste', () => {
     const callbacks = handlers()
     const engine = new MapEngine(document.createElement('div'), callbacks)
@@ -431,7 +470,7 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
     const initialCamera = Reflect.get(engine, 'settings').camera
     invokePointerHandler(engine, 'handlePointerMove', pointerEvent(61, 112, 100, 'touch'))
     Reflect.get(engine, 'flushTouchCameraUpdate').call(engine)
-    expect(Reflect.get(engine, 'settings').camera.x).toBe(initialCamera.x + 5)
+    expect(Reflect.get(engine, 'settings').camera).toEqual(initialCamera)
 
     invokePointerHandler(engine, 'handlePointerMove', pointerEvent(60, 288, 240, 'touch'))
     invokePointerHandler(engine, 'handlePointerUp', pointerEvent(61, 112, 100, 'touch'))

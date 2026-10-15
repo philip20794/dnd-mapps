@@ -24,6 +24,7 @@ describe('SpellRadialMenu', () => {
       },
     })
 
+    await wrapper.get('[data-testid="creation-category-spells"]').trigger('click')
     await wrapper.get('[data-testid="spell-preset-shape-cone"]').trigger('click')
 
     expect(wrapper.emitted('choose')).toEqual([['shape-cone']])
@@ -40,7 +41,8 @@ describe('SpellRadialMenu', () => {
       },
     })
 
-    expect(wrapper.get('.spell-menu-category').text()).toContain('Zauberformen')
+    expect(wrapper.get('.menu-quick-actions').text()).toContain('Zauberform erstellen')
+    expect(wrapper.get('.menu-quick-actions').text()).toContain('Token erstellen')
     expect(wrapper.get('[data-testid="spell-radial-menu"]').text()).toContain('Freie Platzierung')
   })
 

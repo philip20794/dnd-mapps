@@ -33,6 +33,72 @@ const nextUniqueToken = (
 const hasSightlessOpponentDefault = (category: PlacedToken['category']): boolean =>
   category === 'monster' || category === 'undead'
 
+interface TokenNameRename {
+  readonly tokenId: string
+  readonly name: string
+}
+
+export interface TokenDuplicateNamePlan {
+  readonly duplicateName: string
+  readonly renames: readonly TokenNameRename[]
+}
+
+const numberedTokenName = (name: string): { readonly baseName: string; readonly number: number } | null => {
+  const match = /^(.*\S)\s+([1-9]\d*)$/.exec(name)
+  if (!match?.[1] || !match[2]) return null
+  return { baseName: match[1], number: Number(match[2]) }
+}
+
+const genericEnemyBaseName = (token: PlacedToken): string | null => {
+  if (token.category !== 'monster' && token.category !== 'undead') return null
+  const numbered = numberedTokenName(token.name)
+  const baseName = numbered?.baseName ?? token.name
+  return baseName.includes(' ') ? null : baseName
+}
+
+const isOnPlacementLevel = (token: PlacedToken, levelId: string | undefined): boolean =>
+  levelId === undefined || (token.levelId ?? levelId) === levelId
+
+export function planTokenDuplicateNames(
+  tokens: readonly PlacedToken[],
+  source: PlacedToken,
+  levelId?: string,
+): TokenDuplicateNamePlan {
+  const baseName = genericEnemyBaseName(source)
+  if (!baseName) return { duplicateName: source.name, renames: [] }
+
+  const matching = tokens.filter(
+    (token) =>
+      token.mapId === source.mapId &&
+      isOnPlacementLevel(token, levelId) &&
+      genericEnemyBaseName(token) === baseName,
+  )
+  const numbered = matching
+    .map((token) => ({ token, numbered: numberedTokenName(token.name) }))
+    .filter(
+      (entry): entry is {
+        readonly token: PlacedToken
+        readonly numbered: NonNullable<ReturnType<typeof numberedTokenName>>
+      } =>
+        entry.numbered?.baseName === baseName,
+    )
+  const usedNumbers = new Set(numbered.map((entry) => entry.numbered.number))
+  const unnumbered = [
+    ...matching.filter((token) => token.id === source.id && !numberedTokenName(token.name)),
+    ...matching.filter((token) => token.id !== source.id && !numberedTokenName(token.name)),
+  ]
+  const renames: TokenNameRename[] = []
+  let nextNumber = 1
+  for (const token of unnumbered) {
+    while (usedNumbers.has(nextNumber)) nextNumber += 1
+    renames.push({ tokenId: token.id, name: `${baseName} ${nextNumber}` })
+    usedNumbers.add(nextNumber)
+  }
+
+  const duplicateNumber = Math.max(0, ...usedNumbers) + 1
+  return { duplicateName: `${baseName} ${duplicateNumber}`, renames }
+}
+
 export const useTokenStore = defineStore('tokens', {
   state: (): TokenState => ({
     tokens: [],
@@ -108,6 +174,37 @@ export const useTokenStore = defineStore('tokens', {
       this.tokens.push(token)
       this.selectedTokenId = token.id
       return token
+    },
+    duplicateToken(
+      sourceId: string,
+      mapId: string,
+      position: GridPoint,
+      levelId?: string,
+    ): PlacedToken | null {
+      const source = this.tokens.find((token) => token.id === sourceId)
+      if (!source || source.mapId !== mapId) return null
+
+      const identity = nextUniqueToken(this.tokens, this.nextTokenNumber)
+      const names = planTokenDuplicateNames(this.tokens, source, levelId)
+      const renamedTokens = new Map(names.renames.map((rename) => [rename.tokenId, rename.name]))
+      if (renamedTokens.size > 0) {
+        this.tokens = this.tokens.map((token) => {
+          const name = renamedTokens.get(token.id)
+          return name === undefined ? token : { ...token, name }
+        })
+      }
+      const duplicate: PlacedToken = {
+        ...source,
+        id: identity.id,
+        mapId,
+        levelId,
+        name: names.duplicateName,
+        position,
+      }
+      this.nextTokenNumber = identity.nextNumber
+      this.tokens.push(duplicate)
+      this.selectedTokenId = duplicate.id
+      return duplicate
     },
     setSelectedToken(tokenId: string | null): void {
       this.selectedTokenId = tokenId

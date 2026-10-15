@@ -5,13 +5,16 @@ import {
   defaultFogState,
   migrateFogState,
   recordExploration,
+  sharedFogVisibilityMode,
   type FogStateData,
+  type FogVisibilityMode,
 } from '@/map-engine/fog/fogState'
 
 export const useFogStore = defineStore('fog', {
   state: (): FogStateData => ({
     enabled: defaultFogState.enabled,
     persistExploration: defaultFogState.persistExploration,
+    visibilityMode: sharedFogVisibilityMode,
     exploredMasksByMap: {},
   }),
   actions: {
@@ -20,6 +23,9 @@ export const useFogStore = defineStore('fog', {
     },
     setPersistExploration(enabled: boolean): void {
       this.persistExploration = enabled
+    },
+    setVisibilityMode(mode: FogVisibilityMode): void {
+      this.visibilityMode = mode
     },
     record(mapId: string, polygons: readonly Polygon[]): boolean {
       const next = recordExploration(this.$state, mapId, polygons)
@@ -40,6 +46,7 @@ export const useFogStore = defineStore('fog', {
       this.$patch({
         enabled: defaultFogState.enabled,
         persistExploration: defaultFogState.persistExploration,
+        visibilityMode: sharedFogVisibilityMode,
         exploredMasksByMap: {},
       })
     },

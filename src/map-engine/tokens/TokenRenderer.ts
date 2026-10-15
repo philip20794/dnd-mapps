@@ -3,6 +3,7 @@ import type { PlacedToken } from '@/types/tokens'
 import type { GridPoint, PixelPoint } from '@/types/geometry'
 import {
   gridToPixels,
+  hexDistanceBetweenGridPoints,
   hexCorners,
   pixelsToGrid,
   screenToWorld,
@@ -13,9 +14,28 @@ import type { CameraState, GridSettings, MapRotation } from '@/types/settings'
 interface DragState {
   readonly tokenId: string
   readonly pointerOffset: GridPoint
+  readonly startPosition: GridPoint
   lastValidPosition: GridPoint
   readonly pointerStart: PixelPoint
   moved: boolean
+}
+
+interface DragFeedback {
+  readonly container: Container
+  readonly path: Graphics
+  readonly target: Graphics
+  readonly ghost: Container
+  readonly readout: Container
+  readonly readoutBackground: Graphics
+  readonly readoutText: Text
+  renderedHexes: number
+  renderedZoom: number
+}
+
+interface SelectionAnimation {
+  readonly kind: 'select' | 'drop'
+  elapsed: number
+  readonly duration: number
 }
 
 interface TokenVisual {
@@ -94,6 +114,7 @@ export interface TokenRendererHandlers {
   readonly onSelect: (tokenId: string | null) => void
   readonly onMoveEnd: (tokenId: string, position: GridPoint) => void
   readonly onLongPress: (tokenId: string, screenPoint: PixelPoint) => void
+  readonly onRenameRequest?: (tokenId: string, screenPoint: PixelPoint) => void
   readonly constrainMove?: (tokenId: string, from: GridPoint, proposed: GridPoint) => GridPoint
 }
 
@@ -102,7 +123,11 @@ export class TokenRenderer {
   private selectionMarker: Graphics | null = null
   private selectedTokenId: string | null = null
   private selectionMarkerSize: number | null = null
+  private selectionMarkerDragging = false
+  private selectionAnimation: SelectionAnimation | null = null
   private readonly dragging = new Map<number, DragState>()
+  private readonly dragFeedback = new Map<number, DragFeedback>()
+  private feedbackLayer: Container | null = null
   private camera: CameraState = { x: 0, y: 0, zoom: 1 }
   private mapPixelSize: PixelPoint = { x: 0, y: 0 }
   private mapRotation: MapRotation = 0
@@ -115,6 +140,25 @@ export class TokenRenderer {
 
   public isPointerActiveFor(pointerId: number): boolean {
     return this.dragging.has(pointerId)
+  }
+
+  public update(deltaSeconds: number): void {
+    const animation = this.selectionAnimation
+    const marker = this.selectionMarker
+    if (!animation || !marker) return
+
+    animation.elapsed = Math.min(animation.duration, animation.elapsed + deltaSeconds)
+    const progress = animation.elapsed / animation.duration
+    const eased = 1 - Math.pow(1 - progress, 3)
+    marker.alpha = animation.kind === 'select' ? 0.45 + eased * 0.55 : 1
+    const startScale = animation.kind === 'select' ? 0.86 : 1.12
+    const scale = startScale + (1 - startScale) * eased
+    marker.scale.set(scale)
+    if (progress >= 1) {
+      marker.alpha = 1
+      marker.scale.set(1)
+      this.selectionAnimation = null
+    }
   }
 
   public tokenIdAtScreenPoint(screenPoint: PixelPoint, gridSize: number): string | null {
@@ -148,7 +192,9 @@ export class TokenRenderer {
         visual.container.position.set(position.x, position.y)
         this.positionSelectionMarkerForVisual(visual)
       }
+      this.removeDragFeedback(activePointerId)
       this.dragging.delete(activePointerId)
+      this.refreshSelectionMarkerAppearance(drag.tokenId, false)
     }
   }
 
@@ -165,6 +211,7 @@ export class TokenRenderer {
     handlers: TokenRendererHandlers,
   ): void {
     this.gridSize = gridSize
+    this.feedbackLayer = selectionLayer
     this.setCamera(camera, mapPixelSize, mapRotation)
     const remainingIds = new Set(this.tokenVisuals.keys())
     for (const token of tokens) {
@@ -179,13 +226,13 @@ export class TokenRenderer {
       }
     }
     for (const tokenId of remainingIds) {
+      const pointerId = this.pointerIdForToken(tokenId)
+      if (pointerId !== null) this.cancelPointerInteraction(pointerId)
       const visual = this.tokenVisuals.get(tokenId)
       if (!visual) continue
       visual.container.removeFromParent()
       visual.container.destroy({ children: true })
       this.tokenVisuals.delete(tokenId)
-      const pointerId = this.pointerIdForToken(tokenId)
-      if (pointerId !== null) this.cancelPointerInteraction(pointerId)
     }
     this.updateSelectionMarker(selectionLayer, selectedTokenId, gridSize)
   }
@@ -198,6 +245,9 @@ export class TokenRenderer {
     this.camera = camera
     this.mapPixelSize = mapPixelSize
     this.mapRotation = mapRotation
+    for (const [pointerId, drag] of this.dragging) {
+      if (drag.moved) this.updateDragFeedback(pointerId, drag)
+    }
   }
 
   public dragToScreenPoint(
@@ -224,6 +274,7 @@ export class TokenRenderer {
       return true
     }
     this.clearLongPressTimer(pointerId)
+    const dragStarted = !drag.moved
 
     const world = screenToWorld(screenPoint, this.camera, this.mapRotation, this.mapPixelSize)
     const gridPoint = pixelsToGrid(world, gridSize)
@@ -236,6 +287,11 @@ export class TokenRenderer {
     drag.moved = true
     const pixelPosition = gridToPixels(accepted, gridSize)
     visual.container.position.set(pixelPosition.x, pixelPosition.y)
+    if (dragStarted) {
+      this.createDragFeedback(pointerId, drag, visual.token)
+      this.refreshSelectionMarkerAppearance(visual.token.id, true)
+    }
+    this.updateDragFeedback(pointerId, drag)
     if (this.selectedTokenId === visual.token.id && this.selectionMarker) {
       this.selectionMarker.position.set(pixelPosition.x, pixelPosition.y)
     }
@@ -257,12 +313,14 @@ export class TokenRenderer {
 
     const visual = this.tokenVisuals.get(drag.tokenId)
     if (!visual) {
+      this.removeDragFeedback(pointerId)
       this.dragging.delete(pointerId)
       return false
     }
 
     if (!drag.moved) {
       visual.container.cursor = 'grab'
+      this.removeDragFeedback(pointerId)
       this.dragging.delete(pointerId)
       return false
     }
@@ -280,8 +338,11 @@ export class TokenRenderer {
     if (this.selectedTokenId === visual.token.id && this.selectionMarker) {
       this.selectionMarker.position.set(pixelPosition.x, pixelPosition.y)
     }
-    handlers.onMoveEnd(drag.tokenId, accepted)
+    this.removeDragFeedback(pointerId)
     this.dragging.delete(pointerId)
+    this.refreshSelectionMarkerAppearance(drag.tokenId, false)
+    this.startSelectionAnimation('drop')
+    handlers.onMoveEnd(drag.tokenId, accepted)
     return true
   }
 
@@ -336,6 +397,7 @@ export class TokenRenderer {
           x: gridPoint.x - currentToken.position.x,
           y: gridPoint.y - currentToken.position.y,
         },
+        startPosition: { ...currentToken.position },
         lastValidPosition: currentToken.position,
         pointerStart: screenPoint,
         moved: false,
@@ -349,11 +411,18 @@ export class TokenRenderer {
         const pixelPosition = gridToPixels(visual.token.position, gridSize)
         container.position.set(pixelPosition.x, pixelPosition.y)
         container.cursor = 'grab'
+        this.removeDragFeedback(event.pointerId)
         this.dragging.delete(event.pointerId)
+        this.refreshSelectionMarkerAppearance(token.id, false)
         this.longPressTimers.delete(event.pointerId)
         handlers.onLongPress(token.id, screenPoint)
       }, 520)
       this.longPressTimers.set(event.pointerId, timer)
+    })
+    container.on('pointertap', (event: FederatedPointerEvent) => {
+      if (event.detail !== 2 || this.isPointerActiveFor(event.pointerId)) return
+      event.stopPropagation()
+      handlers.onRenameRequest?.(token.id, { x: event.global.x, y: event.global.y })
     })
 
     const position = gridToPixels(token.position, gridSize)
@@ -451,21 +520,30 @@ export class TokenRenderer {
       this.selectionMarker = null
       this.selectedTokenId = null
       this.selectionMarkerSize = null
+      this.selectionMarkerDragging = false
+      this.selectionAnimation = null
       return
     }
     const markerWasCreated = this.selectedTokenId !== token.id || !this.selectionMarker
+    const tokenIsDragging = this.isTokenBeingMoved(token.id)
     if (markerWasCreated) {
       this.selectionMarker?.removeFromParent()
       this.selectionMarker?.destroy()
-      this.selectionMarker = this.createSelectionMarker(token, gridSize)
+      this.selectionMarker = this.createSelectionMarker(token, gridSize, tokenIsDragging)
       selectionLayer.addChild(this.selectionMarker)
       this.selectedTokenId = token.id
       this.selectionMarkerSize = token.size
-    } else if (this.selectionMarkerSize !== token.size) {
+      this.selectionMarkerDragging = tokenIsDragging
+      this.startSelectionAnimation('select')
+    } else if (
+      this.selectionMarkerSize !== token.size ||
+      this.selectionMarkerDragging !== tokenIsDragging
+    ) {
       const marker = this.selectionMarker
       if (!marker) return
-      this.drawSelectionMarker(marker, token, gridSize)
+      this.drawSelectionMarker(marker, token, gridSize, tokenIsDragging)
       this.selectionMarkerSize = token.size
+      this.selectionMarkerDragging = tokenIsDragging
     }
     const marker = this.selectionMarker
     if (!marker) return
@@ -477,13 +555,18 @@ export class TokenRenderer {
     marker.position.set(position.x, position.y)
   }
 
-  private createSelectionMarker(token: PlacedToken, gridSize: number): Graphics {
+  private createSelectionMarker(token: PlacedToken, gridSize: number, dragging: boolean): Graphics {
     const marker = new Graphics()
-    this.drawSelectionMarker(marker, token, gridSize)
+    this.drawSelectionMarker(marker, token, gridSize, dragging)
     return marker
   }
 
-  private drawSelectionMarker(marker: Graphics, token: PlacedToken, gridSize: number): void {
+  private drawSelectionMarker(
+    marker: Graphics,
+    token: PlacedToken,
+    gridSize: number,
+    dragging: boolean,
+  ): void {
     marker.clear()
     const corners = hexCorners({ x: 0, y: 0 }).map((corner) => ({
       x: corner.x * gridSize * token.size,
@@ -498,6 +581,188 @@ export class TokenRenderer {
       marker.lineTo(corner.x, corner.y)
     }
     marker.lineTo(first.x, first.y)
-    marker.stroke({ color: 0xf3d37a, width: Math.max(3, gridSize * 0.06), alpha: 0.96 })
+    marker.stroke({
+      color: 0xf3d37a,
+      width: Math.max(dragging ? 4 : 2, gridSize * (dragging ? 0.075 : 0.045)),
+      alpha: dragging ? 0.98 : 0.76,
+    })
+  }
+
+  private createDragFeedback(pointerId: number, drag: DragState, token: PlacedToken): void {
+    if (this.dragFeedback.has(pointerId) || !this.feedbackLayer) return
+
+    const container = new Container({ label: `token-drag-feedback-${pointerId}` })
+    container.eventMode = 'none'
+    const path = new Graphics()
+    const target = new Graphics()
+    const ghost = this.createGhostToken(token)
+    const readout = new Container()
+    const readoutBackground = new Graphics()
+    const readoutText = new Text({
+      text: '',
+      style: {
+        fill: 0xfff4c2,
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: 14,
+        fontWeight: '700',
+      },
+    })
+    readout.eventMode = 'none'
+    readoutText.anchor.set(0.5)
+    readout.addChild(readoutBackground, readoutText)
+    container.addChild(path, target, ghost, readout)
+    this.feedbackLayer.addChildAt(container, 0)
+    this.dragFeedback.set(pointerId, {
+      container,
+      path,
+      target,
+      ghost,
+      readout,
+      readoutBackground,
+      readoutText,
+      renderedHexes: -1,
+      renderedZoom: -1,
+    })
+
+    const start = gridToPixels(drag.startPosition, this.gridSize)
+    ghost.position.set(start.x, start.y)
+  }
+
+  private createGhostToken(token: PlacedToken): Container {
+    const ghost = new Container()
+    const radius = (token.size * this.gridSize) / 2
+    ghost.eventMode = 'none'
+    ghost.alpha = 0.34
+    ghost.pivot.set(radius, radius)
+    ghost.rotation = (token.rotation * Math.PI) / 180
+
+    const body = new Graphics()
+    this.drawTokenBody(body, token, this.gridSize)
+    const label = new Text({
+      text: token.symbol,
+      style: {
+        fill: 0xffffff,
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: Math.max(14, this.gridSize * 0.34),
+        fontWeight: '800',
+      },
+    })
+    label.anchor.set(0.5)
+    label.position.set(radius, radius)
+    label.eventMode = 'none'
+    ghost.addChild(body, label)
+    return ghost
+  }
+
+  private updateDragFeedback(pointerId: number, drag: DragState): void {
+    const feedback = this.dragFeedback.get(pointerId)
+    const visual = this.tokenVisuals.get(drag.tokenId)
+    if (!feedback || !visual) return
+
+    const start = gridToPixels(drag.startPosition, this.gridSize)
+    const target = gridToPixels(drag.lastValidPosition, this.gridSize)
+    const zoom = Math.max(0.01, this.camera.zoom)
+    this.drawDashedPath(feedback.path, start, target, zoom)
+    if (feedback.renderedZoom !== zoom) {
+      this.drawTargetHighlight(feedback.target, visual.token, zoom)
+      feedback.renderedZoom = zoom
+    }
+    feedback.target.position.set(target.x, target.y)
+
+    const hexes = hexDistanceBetweenGridPoints(drag.startPosition, drag.lastValidPosition)
+    if (feedback.renderedHexes !== hexes) {
+      const readoutText = `${hexes * 5} ft · ${hexes} ${hexes === 1 ? 'Hexfeld' : 'Hexfelder'}`
+      feedback.readoutText.text = readoutText
+      const labelWidth = Math.max(92, readoutText.length * 7.8 + 16)
+      const labelHeight = 28
+      feedback.readoutBackground
+        .clear()
+        .roundRect(-labelWidth / 2, -labelHeight / 2, labelWidth, labelHeight, 7)
+        .fill({ color: 0x17120a, alpha: 0.86 })
+        .stroke({ color: 0xf3d37a, alpha: 0.55, width: 1 })
+      feedback.renderedHexes = hexes
+    }
+
+    const deltaX = target.x - start.x
+    const deltaY = target.y - start.y
+    const length = Math.hypot(deltaX, deltaY)
+    const normalX = length > 0 ? -deltaY / length : 0
+    const normalY = length > 0 ? deltaX / length : -1
+    feedback.readout.position.set(
+      (start.x + target.x) / 2 + (normalX * 18) / zoom,
+      (start.y + target.y) / 2 + (normalY * 18) / zoom,
+    )
+    feedback.readout.scale.set(1 / zoom)
+    feedback.readout.rotation = (-this.mapRotation * Math.PI) / 180
+  }
+
+  private drawDashedPath(
+    path: Graphics,
+    start: PixelPoint,
+    target: PixelPoint,
+    zoom: number,
+  ): void {
+    path.clear()
+    const deltaX = target.x - start.x
+    const deltaY = target.y - start.y
+    const length = Math.hypot(deltaX, deltaY)
+    if (length <= 0) return
+
+    const dashLength = 9 / zoom
+    const gapLength = 6 / zoom
+    for (let offset = 0; offset < length; offset += dashLength + gapLength) {
+      const dashStart = offset / length
+      const dashEnd = Math.min(length, offset + dashLength) / length
+      path
+        .moveTo(start.x + deltaX * dashStart, start.y + deltaY * dashStart)
+        .lineTo(start.x + deltaX * dashEnd, start.y + deltaY * dashEnd)
+    }
+    path.stroke({ color: 0xf3d37a, alpha: 0.74, width: 2 / zoom })
+  }
+
+  private drawTargetHighlight(target: Graphics, token: PlacedToken, zoom: number): void {
+    target.clear()
+    const corners = hexCorners({ x: 0, y: 0 }).map((corner) => ({
+      x: corner.x * this.gridSize * token.size,
+      y: corner.y * this.gridSize * token.size,
+    }))
+    const first = corners[0]
+    if (!first) return
+    target.moveTo(first.x, first.y)
+    for (const corner of corners.slice(1)) target.lineTo(corner.x, corner.y)
+    target.lineTo(first.x, first.y)
+    target
+      .fill({ color: 0xf3d37a, alpha: 0.1 })
+      .stroke({ color: 0xf3d37a, alpha: 0.78, width: 2 / zoom })
+  }
+
+  private removeDragFeedback(pointerId: number): void {
+    const feedback = this.dragFeedback.get(pointerId)
+    if (!feedback) return
+    feedback.container.removeFromParent()
+    feedback.container.destroy({ children: true })
+    this.dragFeedback.delete(pointerId)
+  }
+
+  private isTokenBeingMoved(tokenId: string): boolean {
+    for (const drag of this.dragging.values()) {
+      if (drag.tokenId === tokenId && drag.moved) return true
+    }
+    return false
+  }
+
+  private refreshSelectionMarkerAppearance(tokenId: string, dragging: boolean): void {
+    if (this.selectedTokenId !== tokenId || !this.selectionMarker) return
+    const token = this.tokenVisuals.get(tokenId)?.token
+    if (!token) return
+    this.drawSelectionMarker(this.selectionMarker, token, this.gridSize, dragging)
+    this.selectionMarkerDragging = dragging
+  }
+
+  private startSelectionAnimation(kind: SelectionAnimation['kind']): void {
+    if (!this.selectionMarker) return
+    this.selectionAnimation = { kind, elapsed: 0, duration: kind === 'select' ? 0.16 : 0.14 }
+    this.selectionMarker.alpha = kind === 'select' ? 0.45 : 1
+    this.selectionMarker.scale.set(kind === 'select' ? 0.86 : 1.12)
   }
 }

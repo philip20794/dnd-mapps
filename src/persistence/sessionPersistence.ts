@@ -20,6 +20,7 @@ const createEmptySnapshot = (): SessionSnapshot => ({
   tokens: [],
   spellEffects: [],
   generatedMaps: [],
+  customMaps: [],
   doorStatesByMap: {},
   currentLevelByMap: {},
   fog: structuredClone(defaultFogState),
@@ -27,15 +28,33 @@ const createEmptySnapshot = (): SessionSnapshot => ({
   savedAt: new Date().toISOString(),
 })
 
-const isStoredSessionSnapshot = (
-  value: unknown,
-): value is Omit<SessionSnapshot, 'version' | 'fog'> & { readonly version: 1 | 2; readonly fog: unknown } => {
-  if (!value || typeof value !== 'object') {
-    return false
-  }
+interface StoredSessionSnapshot {
+  readonly version: 1 | 2 | 3
+  readonly selectedMapId: string | null
+  readonly tokens: SessionSnapshot['tokens']
+  readonly spellEffects?: SessionSnapshot['spellEffects']
+  readonly generatedMaps?: SessionSnapshot['generatedMaps']
+  readonly customMaps?: SessionSnapshot['customMaps']
+  readonly doorStatesByMap: SessionSnapshot['doorStatesByMap']
+  readonly currentLevelByMap?: SessionSnapshot['currentLevelByMap']
+  readonly fog: unknown
+  readonly settings: SessionSnapshot['settings']
+  readonly savedAt: string
+}
 
-  const candidate = value as { readonly version?: unknown; readonly tokens?: unknown }
-  return (candidate.version === 1 || candidate.version === 2) && Array.isArray(candidate.tokens)
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const isStoredSessionSnapshot = (value: unknown): value is StoredSessionSnapshot => {
+  if (!isRecord(value)) return false
+  return (
+    (value.version === 1 || value.version === 2 || value.version === 3) &&
+    Array.isArray(value.tokens) &&
+    typeof value.savedAt === 'string' &&
+    isRecord(value.doorStatesByMap) &&
+    isRecord(value.settings)
+  )
 }
 
 export const migrateSessionSnapshot = (value: unknown): SessionSnapshot => {
@@ -45,6 +64,7 @@ export const migrateSessionSnapshot = (value: unknown): SessionSnapshot => {
   return {
     ...value,
     version: SESSION_SCHEMA_VERSION,
+    customMaps: Array.isArray(value.customMaps) ? value.customMaps : [],
     fog: migrateFogState(value.fog),
   }
 }

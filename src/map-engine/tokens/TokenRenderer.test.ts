@@ -4,6 +4,14 @@ import type { PixelPoint } from '@/types/geometry'
 import type { PlacedToken } from '@/types/tokens'
 import { TokenDragFrameQueue, TokenRenderer, type TokenRendererHandlers } from './TokenRenderer'
 
+interface FeedbackProbe {
+  readonly container: Container
+  readonly ghost: Container
+  readonly target: Container
+  readonly readout: Container
+  readonly readoutText: { readonly text: string }
+}
+
 const handlers: TokenRendererHandlers = {
   onSelect: () => undefined,
   onMoveEnd: () => undefined,
@@ -35,6 +43,15 @@ function emitPointerDown(container: Container | undefined, pointerId: number, x:
   } as FederatedPointerEvent)
 }
 
+function emitDoubleTap(container: Container | undefined, pointerId: number, x: number): void {
+  container?.emit('pointertap', {
+    pointerId,
+    detail: 2,
+    global: { x, y: 96 },
+    stopPropagation: () => undefined,
+  } as FederatedPointerEvent)
+}
+
 function renderTokens(
   renderer: TokenRenderer,
   layer: Container,
@@ -55,6 +72,10 @@ function renderTokens(
     { visible: true, snap: true },
     tokenHandlers,
   )
+}
+
+function feedbackFor(renderer: TokenRenderer): Map<number, FeedbackProbe> {
+  return Reflect.get(renderer, 'dragFeedback') as Map<number, FeedbackProbe>
 }
 
 describe('TokenDragFrameQueue', () => {
@@ -133,6 +154,70 @@ describe('TokenRenderer', () => {
     expect(container?.position.x).not.toBe(0)
   })
 
+  it('requests inline renaming only for an inactive double tap', () => {
+    const renderer = new TokenRenderer()
+    const layer = new Container()
+    const requested: Array<{ tokenId: string; point: PixelPoint }> = []
+    const renameHandlers: TokenRendererHandlers = {
+      ...handlers,
+      onRenameRequest: (tokenId, point) => requested.push({ tokenId, point }),
+    }
+    renderTokens(renderer, layer, new Container(), [token('first', 2)], null, renameHandlers)
+
+    emitDoubleTap(layer.children[0], 6, 96)
+    expect(requested).toEqual([{ tokenId: 'first', point: { x: 96, y: 96 } }])
+
+    emitPointerDown(layer.children[0], 7, 96)
+    emitDoubleTap(layer.children[0], 7, 96)
+    expect(requested).toHaveLength(1)
+  })
+
+  it('shows a ghost, target, hex distance and animates the same selection ring', () => {
+    const renderer = new TokenRenderer()
+    const layer = new Container()
+    const selectionLayer = new Container()
+    const first = token('first', 2)
+    renderTokens(renderer, layer, selectionLayer, [first], first.id, handlers)
+    const marker = Reflect.get(renderer, 'selectionMarker') as Container
+
+    expect(marker.scale.x).toBeCloseTo(0.86)
+    renderer.update(0.2)
+    expect(marker.scale.x).toBe(1)
+
+    emitPointerDown(layer.children[0], 9, 96)
+    renderer.dragToScreenPoint(9, { x: 144, y: 96 }, 48, handlers)
+    const feedback = feedbackFor(renderer).get(9)
+
+    expect(feedback?.ghost.position).toMatchObject({ x: 96, y: 96 })
+    expect(feedback?.target.position).toMatchObject({ x: 144, y: 96 })
+    expect(feedback?.readoutText.text).toBe('5 ft · 1 Hexfeld')
+    expect(Reflect.get(renderer, 'selectionMarker')).toBe(marker)
+    expect(Reflect.get(renderer, 'selectionMarkerDragging')).toBe(true)
+
+    renderer.finishDrag(9, { visible: true, snap: true }, 48, handlers)
+    expect(feedbackFor(renderer).size).toBe(0)
+    expect(Reflect.get(renderer, 'selectionMarkerDragging')).toBe(false)
+    expect(marker.scale.x).toBeCloseTo(1.12)
+    renderer.update(0.2)
+    expect(marker.scale.x).toBe(1)
+  })
+
+  it('keeps feedback readable through zoom and map rotation without recreating it', () => {
+    const renderer = new TokenRenderer()
+    const layer = new Container()
+    const selectionLayer = new Container()
+    renderTokens(renderer, layer, selectionLayer, [token('first', 2)], null, handlers)
+    emitPointerDown(layer.children[0], 10, 96)
+    renderer.dragToScreenPoint(10, { x: 144, y: 96 }, 48, handlers)
+    const feedback = feedbackFor(renderer).get(10)
+
+    renderer.setCamera({ x: 20, y: 30, zoom: 2 }, { x: 480, y: 480 }, 90)
+
+    expect(feedbackFor(renderer).get(10)).toBe(feedback)
+    expect(feedback?.readout.scale.x).toBeCloseTo(0.5)
+    expect(feedback?.readout.rotation).toBeCloseTo(-Math.PI / 2)
+  })
+
   it('ordnet einen Token-Drag eindeutig dem auslösenden Pointer zu', () => {
     const renderer = new TokenRenderer()
     const layer = new Container()
@@ -179,6 +264,8 @@ describe('TokenRenderer', () => {
       )
     }
 
+    expect(feedbackFor(renderer).size).toBe(5)
+
     // A Pinia/selection update with stale positions must not move active visuals back.
     renderTokens(renderer, layer, selectionLayer, tokens, 'second', dragHandlers)
     expect(layer.children.map((child) => child.position.x)).toEqual([144, 240, 336, 432, 528])
@@ -189,6 +276,8 @@ describe('TokenRenderer', () => {
     expect(renderer.isPointerActiveFor(14)).toBe(true)
     expect(renderer.isPointerActiveFor(15)).toBe(true)
     expect(moves).toEqual([{ tokenId: 'second', position: expect.objectContaining({ x: 5 }) }])
+    expect(feedbackFor(renderer).has(12)).toBe(false)
+    expect(feedbackFor(renderer).size).toBe(4)
 
     renderer.finishDrag(11, { visible: true, snap: true }, 48, dragHandlers)
     renderer.finishDrag(13, { visible: true, snap: true }, 48, dragHandlers)
@@ -230,6 +319,8 @@ describe('TokenRenderer', () => {
     expect(layer.children[0]?.position.x).toBe(96)
     expect(layer.children[1]?.position.x).toBe(240)
     expect(selected).toEqual(['first', 'second'])
+    expect(feedbackFor(renderer).has(21)).toBe(false)
+    expect(feedbackFor(renderer).has(23)).toBe(true)
   })
 
   it('führt Long Press pro Pointer aus, ohne einen dritten Drag zu beeinflussen', () => {
@@ -254,6 +345,24 @@ describe('TokenRenderer', () => {
     expect(renderer.isPointerActiveFor(32)).toBe(false)
     expect(renderer.isPointerActiveFor(33)).toBe(true)
     expect(layer.children[2]?.position.x).toBe(336)
+    expect(feedbackFor(renderer).size).toBe(1)
+  })
+
+  it('cleans up feedback when an actively dragged token is removed', () => {
+    const renderer = new TokenRenderer()
+    const layer = new Container()
+    const selectionLayer = new Container()
+    const first = token('first', 2)
+    renderTokens(renderer, layer, selectionLayer, [first], null, handlers)
+    emitPointerDown(layer.children[0], 41, 96)
+    renderer.dragToScreenPoint(41, { x: 144, y: 96 }, 48, handlers)
+    const feedback = feedbackFor(renderer).get(41)
+
+    renderTokens(renderer, layer, selectionLayer, [], null, handlers)
+
+    expect(renderer.isPointerActiveFor(41)).toBe(false)
+    expect(feedbackFor(renderer).size).toBe(0)
+    expect(feedback?.container.destroyed).toBe(true)
   })
 
   it('trifft den obersten Token anhand seiner tatsächlichen Kreisfläche', () => {

@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MapDefinition } from '@/maps/api'
 import type { PlacedToken } from '@/types/tokens'
 import { defaultRuntimeSettings } from '@/types/settings'
-import { addPolygonsToExplorationMask, createEmptyExplorationMask } from './fog/fogState'
+import {
+  addPolygonsToExplorationMask,
+  createEmptyExplorationMask,
+  sharedFogVisibilityMode,
+} from './fog/fogState'
 import { FogRenderer } from './fog/FogRenderer'
 import { MapEngine, type MapEngineHandlers } from './MapEngine'
 import { combineVisibleBlockers } from './visibility/visibility'
@@ -32,9 +36,9 @@ const walledMap: MapDefinition = {
   ],
 }
 
-function token(x: number): PlacedToken {
+function token(x: number, id = 'hero'): PlacedToken {
   return {
-    id: 'hero',
+    id,
     mapId: map.id,
     name: 'Held',
     position: { x, y: 4 },
@@ -102,7 +106,12 @@ describe('MapEngine Fog-Aktualisierung', () => {
         { x: 0, y: 12 },
       ],
     ])
-    engine.setFogState({ enabled: true, persistExploration: true, explored: fullyExplored })
+    engine.setFogState({
+      enabled: true,
+      persistExploration: true,
+      visibilityMode: sharedFogVisibilityMode,
+      explored: fullyExplored,
+    })
     renderSpy.mockClear()
     onExplore.mockClear()
 
@@ -117,7 +126,12 @@ describe('MapEngine Fog-Aktualisierung', () => {
     const onExplore = vi.fn<MapEngineHandlers['onExplore']>()
     const engine = new MapEngine(document.createElement('div'), createHandlers(onExplore))
     engine.setMap(map, {})
-    engine.setFogState({ enabled: true, persistExploration: false, explored: null })
+    engine.setFogState({
+      enabled: true,
+      persistExploration: false,
+      visibilityMode: sharedFogVisibilityMode,
+      explored: null,
+    })
     engine.setTokens([token(3)], null)
     renderSpy.mockClear()
 
@@ -133,11 +147,21 @@ describe('MapEngine Fog-Aktualisierung', () => {
     const engine = new MapEngine(document.createElement('div'), createHandlers(onExplore))
     engine.setMap(map, {})
     engine.setTokens([token(3)], null)
-    engine.setFogState({ enabled: true, persistExploration: false, explored: null })
+    engine.setFogState({
+      enabled: true,
+      persistExploration: false,
+      visibilityMode: sharedFogVisibilityMode,
+      explored: null,
+    })
     renderSpy.mockClear()
     onExplore.mockClear()
 
-    engine.setFogState({ enabled: true, persistExploration: true, explored: null })
+    engine.setFogState({
+      enabled: true,
+      persistExploration: true,
+      visibilityMode: sharedFogVisibilityMode,
+      explored: null,
+    })
 
     expect(onExplore).toHaveBeenCalledOnce()
     expect(renderSpy).toHaveBeenCalledOnce()
@@ -150,7 +174,12 @@ describe('MapEngine Fog-Aktualisierung', () => {
       createHandlers(() => undefined),
     )
     engine.setMap(walledMap, {})
-    engine.setFogState({ enabled: true, persistExploration: false, explored: null })
+    engine.setFogState({
+      enabled: true,
+      persistExploration: false,
+      visibilityMode: sharedFogVisibilityMode,
+      explored: null,
+    })
     engine.setTokens([token(3)], null)
     const fields = Reflect.get(engine, 'currentVisibilityFields')
     expect(combineVisibleBlockers(fields)[0]?.blockerId).toBe('wall:visible-wall')
@@ -176,7 +205,12 @@ describe('MapEngine Fog-Aktualisierung', () => {
     const onExplore = vi.fn<MapEngineHandlers['onExplore']>()
     const engine = new MapEngine(document.createElement('div'), createHandlers(onExplore))
     engine.setMap(map, {})
-    engine.setFogState({ enabled: true, persistExploration: false, explored: null })
+    engine.setFogState({
+      enabled: true,
+      persistExploration: false,
+      visibilityMode: sharedFogVisibilityMode,
+      explored: null,
+    })
     const sightlessMonster = {
       ...token(3),
       id: 'goblin',
@@ -191,6 +225,46 @@ describe('MapEngine Fog-Aktualisierung', () => {
 
     expect(renderSpy).toHaveBeenCalledOnce()
     expect(Reflect.get(engine, 'currentVisiblePolygons')).not.toEqual([])
+    engine.destroy()
+  })
+
+  it('zeigt im Spielermodus nur dessen aktuelle Sicht und verwendet keine gemeinsame Erkundung', () => {
+    const onExplore = vi.fn<MapEngineHandlers['onExplore']>()
+    const engine = new MapEngine(document.createElement('div'), createHandlers(onExplore))
+    const explored = addPolygonsToExplorationMask(createEmptyExplorationMask(), [
+      [
+        { x: 0, y: 0 },
+        { x: 12, y: 0 },
+        { x: 12, y: 12 },
+        { x: 0, y: 12 },
+      ],
+    ])
+    engine.setMap(walledMap, {})
+    engine.setTokens([token(3, 'hero-left'), token(9, 'hero-right')], null)
+    engine.setFogState({
+      enabled: true,
+      persistExploration: true,
+      visibilityMode: sharedFogVisibilityMode,
+      explored,
+    })
+    onExplore.mockClear()
+    renderSpy.mockClear()
+
+    engine.setFogState({
+      enabled: true,
+      persistExploration: true,
+      visibilityMode: { kind: 'player', tokenId: 'hero-left' },
+      explored,
+    })
+
+    const fields: readonly unknown[] = Reflect.get(engine, 'currentVisibilityFields')
+    const renderState = renderSpy.mock.calls.at(-1)?.[2]
+    expect(fields).toHaveLength(1)
+    expect(onExplore).not.toHaveBeenCalled()
+    expect(renderState).toMatchObject({ persistExploration: false, explored: null })
+    expect(combineVisibleBlockers(Reflect.get(engine, 'currentVisibilityFields'))[0]?.blockerId).toBe(
+      'wall:visible-wall',
+    )
     engine.destroy()
   })
 })

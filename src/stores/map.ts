@@ -1,9 +1,11 @@
 import { defineStore } from 'pinia'
+import { isCustomMap } from '@/map-editor/mapEditor'
 import { getDefaultLevelId, getLevelName } from '@/maps/api'
 import type { DoorState, MapDefinition, MapLevelDefinition } from '@/maps/api'
 
 interface MapState {
   maps: MapDefinition[]
+  sourceMapIds: string[]
   selectedMapId: string | null
   doorStatesByMap: Record<string, Record<string, DoorState>>
   currentLevelByMap: Record<string, string>
@@ -12,6 +14,7 @@ interface MapState {
 export const useMapStore = defineStore('map', {
   state: (): MapState => ({
     maps: [],
+    sourceMapIds: [],
     selectedMapId: null,
     doorStatesByMap: {},
     currentLevelByMap: {},
@@ -52,10 +55,12 @@ export const useMapStore = defineStore('map', {
         : null
       return map && levelId ? getLevelName(map, levelId) : ''
     },
+    customMaps: (state): readonly MapDefinition[] => state.maps.filter(isCustomMap),
   },
   actions: {
     setMaps(maps: readonly MapDefinition[]): void {
       this.maps = [...maps]
+      this.sourceMapIds = maps.map((map) => map.id)
       for (const map of maps) {
         this.ensureDoorStates(map.id)
         this.ensureLevel(map.id)
@@ -77,6 +82,22 @@ export const useMapStore = defineStore('map', {
       this.currentLevelByMap[map.id] = getDefaultLevelId(map)
       this.selectedMapId = map.id
     },
+    upsertCustomMap(map: MapDefinition): void {
+      if (!isCustomMap(map)) {
+        throw new Error('Nur als eigene Karte markierte Definitionen können gespeichert werden.')
+      }
+      if (this.sourceMapIds.includes(map.id)) {
+        throw new Error(`Die Originalkarte "${map.id}" darf nicht überschrieben werden.`)
+      }
+      const existingIndex = this.maps.findIndex((entry) => entry.id === map.id)
+      this.maps =
+        existingIndex >= 0
+          ? this.maps.map((entry, index) => (index === existingIndex ? map : entry))
+          : [map, ...this.maps]
+      this.ensureDoorStates(map.id)
+      this.ensureLevel(map.id)
+      this.selectedMapId = map.id
+    },
     restoreGeneratedMaps(maps: readonly MapDefinition[]): void {
       const selectedMapId = this.selectedMapId
       for (const map of maps) {
@@ -91,6 +112,18 @@ export const useMapStore = defineStore('map', {
       }
       if (selectedMapId && this.maps.some((map) => map.id === selectedMapId)) {
         this.selectedMapId = selectedMapId
+      }
+    },
+    restoreCustomMaps(maps: readonly MapDefinition[]): void {
+      const acceptedIds = new Set(this.maps.map((map) => map.id))
+      for (const map of maps) {
+        if (!isCustomMap(map) || this.sourceMapIds.includes(map.id) || acceptedIds.has(map.id)) {
+          continue
+        }
+        this.maps = [map, ...this.maps]
+        acceptedIds.add(map.id)
+        this.ensureDoorStates(map.id)
+        this.ensureLevel(map.id)
       }
     },
     selectMap(mapId: string): void {

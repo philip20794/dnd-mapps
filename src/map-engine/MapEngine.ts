@@ -16,7 +16,13 @@ import {
   type SpellPlacement,
 } from '@/types/spells'
 import type { PlacedToken } from '@/types/tokens'
-import { fitCameraToMap, panCamera, resetCamera, zoomCameraAt } from './camera/camera'
+import {
+  fitCameraToMap,
+  panCamera,
+  resetCamera,
+  rotateCameraAt,
+  zoomCameraAt,
+} from './camera/camera'
 import { TouchCameraGesture } from './camera/TouchCameraGesture'
 import { AnimationManager } from './animations/AnimationManager'
 import {
@@ -27,7 +33,13 @@ import {
   type MovementSegmentIndex,
 } from './collision/movement'
 import { FogRenderer, type FogRenderState } from './fog/FogRenderer'
-import type { ExplorationMask } from './fog/fogState'
+import {
+  isSharedFogVisibility,
+  resolveFogVisibilityTokens,
+  sharedFogVisibilityMode,
+  type ExplorationMask,
+  type FogVisibilityMode,
+} from './fog/fogState'
 import {
   clientToLocal,
   hexCentersForBounds,
@@ -64,6 +76,8 @@ import {
   type VisibilityField,
 } from './visibility/visibility'
 import type { FogLightSource } from './lighting/lightSources'
+import { MapEditorController } from './editor/MapEditorController'
+import type { MapEditorSelection, MapEditorState } from '@/map-editor/types'
 import { MaterialRenderer, type RenderedMaterialLayers } from './materials/MaterialRenderer'
 import {
   createStaticObjectChunks,
@@ -75,6 +89,7 @@ import {
 export interface EngineFogState {
   readonly enabled: boolean
   readonly persistExploration: boolean
+  readonly visibilityMode: FogVisibilityMode
   readonly explored: ExplorationMask | null
 }
 
@@ -82,6 +97,7 @@ export interface MapEngineHandlers {
   readonly onTokenSelect: (tokenId: string | null) => void
   readonly onTokenMove: (tokenId: string, position: GridPoint) => void
   readonly onTokenLongPress: (tokenId: string, screenPoint: PixelPoint) => void
+  readonly onTokenRenameRequest?: (tokenId: string, screenPoint: PixelPoint) => void
   readonly onMapLongPress: (position: GridPoint, screenPoint: PixelPoint) => void
   readonly onSpellPlace: (placement: SpellPlacement, target: GridPoint) => void
   readonly onSpellPlacementCancel: () => void
@@ -93,9 +109,14 @@ export interface MapEngineHandlers {
   readonly onDoorToggle: (doorId: string) => void
   readonly onLevelTransition: (transition: VerticalTransitionConfig, sourceObjectId: string) => void
   readonly onCameraChange: (camera: RuntimeSettings['camera']) => void
+  readonly onMapRotationChange?: (rotation: RuntimeSettings['mapRotation']) => void
   readonly onExplore: (mapId: string, levelId: string, polygons: readonly Polygon[]) => void
   readonly onError: (message: string) => void
+  readonly onEditorSelect?: (selection: MapEditorSelection | null) => void
+  readonly onEditorCommit?: (map: MapDefinition, selection: MapEditorSelection | null) => void
 }
+
+export type MapInteractionMode = 'play' | 'map-editor'
 
 interface PanState {
   readonly pointerId: number
@@ -156,14 +177,34 @@ export class MapEngine {
   private pendingSpellEffectPoint: GridPoint | null = null
   private doorStates: Readonly<Record<string, DoorState>> = {}
   private settings: RuntimeSettings = defaultRuntimeSettings
-  private fogState: EngineFogState = { enabled: false, persistExploration: true, explored: null }
+  private fogState: EngineFogState = {
+    enabled: false,
+    persistExploration: true,
+    visibilityMode: sharedFogVisibilityMode,
+    explored: null,
+  }
   private currentVisiblePolygons: readonly Polygon[] = []
   private currentVisibilityFields: readonly VisibilityField[] = []
   private panState: PanState | null = null
   private mapLongPress: MapLongPressState | null = null
   private readonly touchCameraGesture = new TouchCameraGesture()
   private touchCameraFrame: number | null = null
+  private touchCameraRotationRemainder = 0
   private readonly capturedPointerIds = new Set<number>()
+  private interactionMode: MapInteractionMode = 'play'
+  private editorState: MapEditorState = {
+    tool: 'select',
+    selection: null,
+    snap: true,
+    objectTemplate: null,
+    material: 'stone',
+    brushSize: 'medium',
+    materialRotation: 0,
+    materialScale: 1,
+    materialAlpha: 1,
+    decalKind: 'crack',
+  }
+  private editorTouchStart: { readonly pointerId: number; screen: PixelPoint } | null = null
   private spacePressed = false
   private movementSegmentIndex: MovementSegmentIndex | null = null
   private preparedVisibilityGeometry: PreparedVisibilityGeometry | null = null
@@ -172,6 +213,8 @@ export class MapEngine {
   private cachedVisibilityInputKey: string | null = null
   private currentDoorStateKey = ''
   private readonly tokenDragQueue = new TokenDragFrameQueue()
+  private readonly editorController: MapEditorController
+  private pendingMaterialChunks: ReadonlySet<string> | null = null
   private readonly tokenRendererHandlers: TokenRendererHandlers = {
     onSelect: (tokenId) => this.handlers.onTokenSelect(tokenId),
     onMoveEnd: (tokenId, position) => this.handlers.onTokenMove(tokenId, position),
@@ -179,13 +222,23 @@ export class MapEngine {
       this.handlers.onTokenLongPress(tokenId, screenPoint)
       this.renderTokens()
     },
+    onRenameRequest: (tokenId, screenPoint) =>
+      this.handlers.onTokenRenameRequest?.(tokenId, screenPoint),
     constrainMove: (tokenId, from, proposed) => this.constrainTokenMove(tokenId, from, proposed),
   }
 
   public constructor(
     private readonly host: HTMLElement,
     private readonly handlers: MapEngineHandlers,
-  ) {}
+  ) {
+    this.editorController = new MapEditorController(this.layers.selection, {
+      onSelect: (selection) => this.handlers.onEditorSelect?.(selection),
+      onCommit: (map, selection, dirtyMaterialChunks) => {
+        this.pendingMaterialChunks = dirtyMaterialChunks ?? null
+        this.handlers.onEditorCommit?.(map, selection)
+      },
+    })
+  }
 
   public async init(): Promise<void> {
     try {
@@ -209,6 +262,7 @@ export class MapEngine {
 
       this.app.ticker.add((ticker) => {
         this.animations.update(ticker.deltaMS / 1000)
+        this.tokenRenderer.update(ticker.deltaMS / 1000)
       })
 
       this.installDomEvents()
@@ -227,6 +281,28 @@ export class MapEngine {
     doorStates: Readonly<Record<string, DoorState>>,
     levelId = getDefaultLevelId(map),
   ): void {
+    if (
+      this.pendingMaterialChunks &&
+      this.map?.id === map.id &&
+      this.currentLevelId === levelId &&
+      this.map.width === map.width &&
+      this.map.height === map.height &&
+      this.map.gridSize === map.gridSize &&
+      this.renderedMaterials
+    ) {
+      const dirty = this.pendingMaterialChunks
+      this.pendingMaterialChunks = null
+      this.map = map
+      this.doorStates = doorStates
+      const definitions = (map.materialLayers ?? []).filter(
+        (layer) => entryLevelId(layer, map) === levelId,
+      )
+      this.renderedMaterials.refreshChunks(definitions, map.width, map.height, map.gridSize, dirty)
+      this.editorController.setMap(map, levelId)
+      this.updateChunkVisibility()
+      return
+    }
+    this.pendingMaterialChunks = null
     this.cancelMapPointerInteractions()
     this.map = map
     this.doorStates = doorStates
@@ -239,6 +315,21 @@ export class MapEngine {
     this.renderTokens()
     this.renderSpellEffects()
     this.updateVisibility()
+    this.editorController.setMap(map, levelId)
+  }
+
+  public setInteractionMode(mode: MapInteractionMode): void {
+    if (this.interactionMode === mode) return
+    this.cancelMapPointerInteractions()
+    this.interactionMode = mode
+    this.layers.tokens.interactiveChildren = mode === 'play' && this.spellPlacement === null
+    this.layers.interactiveObjects.interactiveChildren = mode === 'play'
+    this.layers.wallsDoors.interactiveChildren = mode === 'play'
+  }
+
+  public setEditorState(state: MapEditorState): void {
+    this.editorState = state
+    this.editorController.setState(state)
   }
 
   public setLevel(levelId: string): void {
@@ -254,6 +345,7 @@ export class MapEngine {
     this.renderTokens()
     this.renderSpellEffects()
     this.updateVisibility()
+    this.editorController.setMap(this.map, levelId)
   }
 
   public setTokens(tokens: readonly PlacedToken[], selectedTokenId: string | null): void {
@@ -312,7 +404,7 @@ export class MapEngine {
             ? { x: caster.position.x + preset.sizeFeet / FEET_PER_GRID_UNIT, y: caster.position.y }
             : caster.position
           : null
-    this.layers.tokens.interactiveChildren = placement === null
+    this.layers.tokens.interactiveChildren = this.interactionMode === 'play' && placement === null
     this.renderSpellEffects()
   }
 
@@ -342,6 +434,7 @@ export class MapEngine {
     this.animations.setReducedMotion(settings.animations.reduced)
     this.layers.light.visible = settings.lighting.enabled
     this.applyCamera()
+    this.editorController.setZoom(settings.camera.zoom)
     if (this.map && gridVisibilityChanged) {
       this.renderMap()
       this.renderTokens()
@@ -359,8 +452,13 @@ export class MapEngine {
     const activated = !this.fogState.enabled && fogState.enabled
     const persistenceActivated =
       fogState.enabled && !this.fogState.persistExploration && fogState.persistExploration
+    const visibilityModeChanged =
+      this.fogState.visibilityMode.kind !== fogState.visibilityMode.kind ||
+      (this.fogState.visibilityMode.kind === 'player' &&
+        fogState.visibilityMode.kind === 'player' &&
+        this.fogState.visibilityMode.tokenId !== fogState.visibilityMode.tokenId)
     this.fogState = fogState
-    if (activated || persistenceActivated) {
+    if (activated || persistenceActivated || visibilityModeChanged) {
       this.cachedVisibilityInputKey = null
       this.updateVisibility()
       return
@@ -416,6 +514,7 @@ export class MapEngine {
     this.fogRenderer.destroy()
     this.animations.destroy()
     this.resources.clear()
+    this.editorController.destroy()
     this.app?.destroy(true, { children: true })
     this.app = null
   }
@@ -669,14 +768,17 @@ export class MapEngine {
       return
     }
 
-    const activeTokens = this.activeTokens()
-    const inputKey = this.visibilityInputKey(activeTokens)
+    const visibilityTokens = resolveFogVisibilityTokens(
+      this.activeTokens(),
+      this.fogState.visibilityMode,
+    )
+    const inputKey = this.visibilityInputKey(visibilityTokens)
     if (inputKey === this.cachedVisibilityInputKey) {
       return
     }
     this.cachedVisibilityInputKey = inputKey
     this.currentVisibilityFields = combineVisibilityFieldsWithPreparedGeometry(
-      activeTokens,
+      visibilityTokens,
       this.map,
       this.visibilityGeometryForCurrentMap(),
       this.fogLightSourcesForCurrentMap(),
@@ -684,7 +786,9 @@ export class MapEngine {
     )
     this.currentVisiblePolygons = this.currentVisibilityFields.map((field) => field.polygon)
 
-    this.handlers.onExplore(this.map.id, this.currentLevelId, this.currentVisiblePolygons)
+    if (isSharedFogVisibility(this.fogState.visibilityMode)) {
+      this.handlers.onExplore(this.map.id, this.currentLevelId, this.currentVisiblePolygons)
+    }
     this.renderFog()
   }
 
@@ -714,7 +818,11 @@ export class MapEngine {
   }
 
   private visibilityInputKey(tokens: readonly PlacedToken[]): string {
-    return `${this.visibilityRevision}|${this.settings.lighting.enabled ? 1 : 0}|${visibilityTokenStateKey(tokens)}`
+    const modeKey =
+      this.fogState.visibilityMode.kind === 'shared'
+        ? 'shared'
+        : `player:${this.fogState.visibilityMode.tokenId}`
+    return `${this.visibilityRevision}|${this.settings.lighting.enabled ? 1 : 0}|${modeKey}|${visibilityTokenStateKey(tokens)}`
   }
 
   private invalidateVisibilityGeometry(): void {
@@ -738,12 +846,13 @@ export class MapEngine {
       return
     }
 
+    const sharedVisibility = isSharedFogVisibility(this.fogState.visibilityMode)
     const state: FogRenderState = {
       enabled: this.fogState.enabled,
-      persistExploration: this.fogState.persistExploration,
+      persistExploration: sharedVisibility && this.fogState.persistExploration,
       visible: this.currentVisiblePolygons,
       visibilityFields: this.currentVisibilityFields,
-      explored: this.fogState.explored,
+      explored: sharedVisibility ? this.fogState.explored : null,
     }
     this.fogRenderer.render(this.layers.fog, this.map, state)
   }
@@ -769,6 +878,7 @@ export class MapEngine {
     this.world.scale.set(this.settings.camera.zoom)
     this.world.rotation = (rotation * Math.PI) / 180
     this.tokenRenderer.setCamera(this.settings.camera, mapPixelSize, rotation)
+    this.editorController.setZoom(this.settings.camera.zoom)
     this.updateChunkVisibility()
   }
 
@@ -1050,6 +1160,7 @@ export class MapEngine {
   }
 
   private handleObjectInteraction(objectId: string): void {
+    if (this.interactionMode === 'map-editor') return
     if (!this.map) {
       return
     }
@@ -1124,6 +1235,43 @@ export class MapEngine {
   }
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
+    if (
+      this.interactionMode === 'map-editor' &&
+      event.button === 0 &&
+      !this.spacePressed &&
+      this.map
+    ) {
+      const bounds = this.host.getBoundingClientRect()
+      const local = clientToLocal({ x: event.clientX, y: event.clientY }, bounds)
+      const activeEditorPointer = this.editorController.activePointerId
+      if (
+        event.pointerType === 'touch' &&
+        this.editorTouchStart !== null &&
+        this.editorTouchStart.pointerId !== event.pointerId
+      ) {
+        const firstTouch = this.editorTouchStart
+        if (activeEditorPointer !== null) this.editorController.cancelPointer(activeEditorPointer)
+        this.touchCameraGesture.add(firstTouch.pointerId, clientToLocal(firstTouch.screen, bounds))
+        this.touchCameraGesture.add(event.pointerId, local)
+        this.editorTouchStart = null
+        this.touchCameraRotationRemainder = 0
+        this.capturePointer(event.pointerId)
+        event.preventDefault()
+        return
+      }
+      const point = this.clientToGridPoint(event.clientX, event.clientY, false)
+      if (point && this.editorController.pointerDown(event, point)) {
+        if (event.pointerType === 'touch') {
+          this.editorTouchStart = {
+            pointerId: event.pointerId,
+            screen: { x: event.clientX, y: event.clientY },
+          }
+        }
+        this.capturePointer(event.pointerId)
+        event.preventDefault()
+      }
+      return
+    }
     if (this.spellPlacement) {
       if (event.button === 2) {
         event.preventDefault()
@@ -1195,10 +1343,14 @@ export class MapEngine {
           if (event.pointerType === 'touch') {
             const bounds = this.host.getBoundingClientRect()
             this.clearMapLongPress()
+            const touchCount = this.touchCameraGesture.size
             this.touchCameraGesture.add(
               event.pointerId,
               clientToLocal({ x: event.clientX, y: event.clientY }, bounds),
             )
+            if (touchCount < 2 && this.touchCameraGesture.size === 2) {
+              this.touchCameraRotationRemainder = 0
+            }
             this.capturePointer(event.pointerId)
           }
           event.preventDefault()
@@ -1228,7 +1380,11 @@ export class MapEngine {
       if (this.touchCameraGesture.size > 0) {
         this.clearMapLongPress()
       }
+      const touchCount = this.touchCameraGesture.size
       this.touchCameraGesture.add(event.pointerId, local)
+      if (touchCount < 2 && this.touchCameraGesture.size === 2) {
+        this.touchCameraRotationRemainder = 0
+      }
       if (this.touchCameraGesture.size === 1 && position) {
         this.beginMapLongPress(event.pointerId, local, position)
       } else {
@@ -1247,6 +1403,16 @@ export class MapEngine {
   }
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
+    if (this.editorTouchStart?.pointerId === event.pointerId) {
+      this.editorTouchStart.screen = { x: event.clientX, y: event.clientY }
+    }
+    if (this.interactionMode === 'map-editor' && !this.touchCameraGesture.has(event.pointerId)) {
+      const point = this.clientToGridPoint(event.clientX, event.clientY, false)
+      if (point && this.editorController.pointerMove(event, point)) {
+        event.preventDefault()
+        return
+      }
+    }
     if (this.spellPlacement) {
       const target = this.clientToGridPoint(event.clientX, event.clientY, false)
       if (target) {
@@ -1349,6 +1515,15 @@ export class MapEngine {
   }
 
   private readonly handlePointerUp = (event: PointerEvent): void => {
+    if (this.editorTouchStart?.pointerId === event.pointerId) this.editorTouchStart = null
+    if (this.interactionMode === 'map-editor') {
+      const point = this.clientToGridPoint(event.clientX, event.clientY, false)
+      if (point && this.editorController.pointerUp(event, point)) {
+        this.releasePointer(event.pointerId)
+        event.preventDefault()
+        return
+      }
+    }
     this.clearMapLongPress(event.pointerId)
     if (this.finishSpellEffectInteraction(event)) {
       this.releasePointer(event.pointerId)
@@ -1407,6 +1582,12 @@ export class MapEngine {
       this.cancelSpellEffectInteraction()
       this.setSpellEffectEditing(null)
       this.renderSpellEffects()
+      return
+    }
+    if (event.code === 'Escape' && this.interactionMode === 'map-editor') {
+      if (this.editorController.cancelPointer() || this.editorController.cancelPendingTool()) {
+        event.preventDefault()
+      }
       return
     }
     if (event.code === 'Escape' && this.editingSpellEffectId) {
@@ -1519,6 +1700,7 @@ export class MapEngine {
       this.mapLongPress = null
       this.touchCameraGesture.remove(pointerId)
       this.cancelTouchCameraFrame()
+      this.touchCameraRotationRemainder = 0
       this.handlers.onMapLongPress(position, screenPoint)
     }, 520)
     this.mapLongPress = state
@@ -1551,11 +1733,43 @@ export class MapEngine {
   }
 
   private applyTouchCameraUpdate(): void {
-    const camera = this.touchCameraGesture.apply(this.settings.camera)
-    if (!camera) return
-    this.settings = { ...this.settings, camera }
+    const update = this.touchCameraGesture.apply(this.settings.camera)
+    if (!update) return
+    const previousRotation = normalizeMapRotation(this.settings.mapRotation)
+    const nextRotation = this.consumeTouchRotation(update.rotationDelta)
+    const camera =
+      nextRotation !== previousRotation && this.map
+        ? rotateCameraAt(
+            update.camera,
+            update.center,
+            { x: this.map.width * this.map.gridSize, y: this.map.height * this.map.gridSize },
+            previousRotation,
+            nextRotation,
+          )
+        : update.camera
+    this.settings = { ...this.settings, camera, mapRotation: nextRotation }
     this.applyCamera()
     this.handlers.onCameraChange(camera)
+    if (nextRotation !== previousRotation) {
+      this.handlers.onMapRotationChange?.(nextRotation)
+    }
+  }
+
+  private consumeTouchRotation(rotationDelta: number): RuntimeSettings['mapRotation'] {
+    const quarterTurn = Math.PI / 2
+    const threshold = quarterTurn / 2
+    let rotation = normalizeMapRotation(this.settings.mapRotation)
+    this.touchCameraRotationRemainder += rotationDelta
+
+    while (this.touchCameraRotationRemainder >= threshold) {
+      rotation = normalizeMapRotation(rotation + 90)
+      this.touchCameraRotationRemainder -= quarterTurn
+    }
+    while (this.touchCameraRotationRemainder <= -threshold) {
+      rotation = normalizeMapRotation(rotation - 90)
+      this.touchCameraRotationRemainder += quarterTurn
+    }
+    return rotation
   }
 
   private finishTouchCameraPointer(event: PointerEvent): boolean {
@@ -1567,11 +1781,17 @@ export class MapEngine {
     )
     this.flushTouchCameraUpdate()
     this.touchCameraGesture.remove(event.pointerId)
+    if (this.touchCameraGesture.size < 2) this.touchCameraRotationRemainder = 0
     return true
   }
 
   private cancelPointerInteraction(pointerId: number): boolean {
     let cancelled = this.clearMapLongPress(pointerId)
+    if (this.editorTouchStart?.pointerId === pointerId) {
+      this.editorTouchStart = null
+      cancelled = true
+    }
+    if (this.editorController.cancelPointer(pointerId)) cancelled = true
     if (this.tokenRenderer.isPointerActiveFor(pointerId)) {
       this.tokenDragQueue.cancel(pointerId)
       this.tokenRenderer.cancelPointerInteraction(pointerId)
@@ -1579,6 +1799,7 @@ export class MapEngine {
     }
     if (this.touchCameraGesture.remove(pointerId)) {
       this.cancelTouchCameraFrame()
+      if (this.touchCameraGesture.size < 2) this.touchCameraRotationRemainder = 0
       cancelled = true
     }
     if (this.cancelSpellEffectInteraction(pointerId)) {
@@ -1602,6 +1823,7 @@ export class MapEngine {
     const pointerIds = this.touchCameraGesture.pointerIds
     this.cancelTouchCameraFrame()
     this.touchCameraGesture.clear()
+    this.touchCameraRotationRemainder = 0
     for (const pointerId of pointerIds) this.releasePointer(pointerId)
   }
 
@@ -1634,6 +1856,7 @@ export class MapEngine {
     this.cancelSpellEffectInteraction()
     this.setSpellEffectEditing(null)
     this.panState = null
+    this.editorTouchStart = null
     this.releaseAllPointers()
   }
 

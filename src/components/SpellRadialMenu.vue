@@ -18,13 +18,16 @@ const props = defineProps<{
   y: number
 }>()
 
-const activeCategory = ref<'spells' | 'tokens'>('spells')
+type CreationView = 'quick' | 'spells' | 'tokens'
+
+const activeView = ref<CreationView>(props.tokenCreationEnabled ? 'quick' : 'spells')
 const selectedTokenCategory = ref<QuickTokenCategory | null>(null)
 const selectedMonsterSize = ref<TokenSizeId>('medium')
 const playerColor = ref('#3f8cff')
 const monsterColor = ref('#dc4b4b')
 const backdrop = ref<HTMLElement | null>(null)
 const menu = ref<HTMLElement | null>(null)
+let resizeObserver: ResizeObserver | null = null
 const position = ref<{ left: number; top: number; maxHeight: number | null }>({
   left: props.x,
   top: props.y,
@@ -37,12 +40,16 @@ const selectedSize = computed(
 watch(
   () => props.open,
   (open) => {
-    if (!open) return
-    activeCategory.value = 'spells'
+    if (!open) {
+      resizeObserver?.disconnect()
+      return
+    }
+    activeView.value = props.tokenCreationEnabled ? 'quick' : 'spells'
     selectedTokenCategory.value = null
     selectedMonsterSize.value = 'medium'
     playerColor.value = '#3f8cff'
     monsterColor.value = '#dc4b4b'
+    void nextTick(observeMenu)
   },
 )
 
@@ -69,17 +76,27 @@ const updatePosition = async (): Promise<void> => {
 }
 
 watch(
-  () => [props.open, props.x, props.y],
+  () => [props.open, props.x, props.y, activeView.value, selectedTokenCategory.value],
   () => void updatePosition(),
 )
 const refreshPosition = (): void => void updatePosition()
+const observeMenu = (): void => {
+  resizeObserver?.disconnect()
+  if (menu.value && 'ResizeObserver' in window) {
+    resizeObserver = new ResizeObserver(refreshPosition)
+    resizeObserver.observe(menu.value)
+  }
+}
 onMounted(() => {
   window.addEventListener('resize', refreshPosition)
   window.visualViewport?.addEventListener('resize', refreshPosition)
   window.visualViewport?.addEventListener('scroll', refreshPosition)
+  void nextTick(observeMenu)
   void updatePosition()
 })
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  resizeObserver = null
   window.removeEventListener('resize', refreshPosition)
   window.visualViewport?.removeEventListener('resize', refreshPosition)
   window.visualViewport?.removeEventListener('scroll', refreshPosition)
@@ -121,7 +138,15 @@ const createQuickToken = (): void => {
     >
       <header class="spell-menu-header">
         <div>
-          <strong>{{ activeCategory === 'spells' ? 'Flächenform' : 'Token erstellen' }}</strong>
+          <strong>
+            {{
+              activeView === 'quick'
+                ? 'Erstellen'
+                : activeView === 'spells'
+                  ? 'Zauberform erstellen'
+                  : 'Token erstellen'
+            }}
+          </strong>
           <small>{{ contextLabel }}</small>
         </div>
         <button
@@ -133,30 +158,39 @@ const createQuickToken = (): void => {
           ×
         </button>
       </header>
-      <div v-if="tokenCreationEnabled" class="spell-menu-tabs" role="tablist">
+      <section v-if="activeView === 'quick'" class="menu-quick-actions" aria-label="Erstellen">
         <button
           type="button"
-          role="tab"
-          :aria-selected="activeCategory === 'spells'"
-          :class="{ active: activeCategory === 'spells' }"
+          class="menu-quick-action primary"
           data-testid="creation-category-spells"
-          @click="activeCategory = 'spells'"
+          @click="activeView = 'spells'"
         >
-          Zauberformen
+          <span aria-hidden="true">✦</span>
+          <span
+            ><strong>Zauberform erstellen</strong><small>Kreis, Kegel, Linie und mehr</small></span
+          >
         </button>
         <button
           type="button"
-          role="tab"
-          :aria-selected="activeCategory === 'tokens'"
-          :class="{ active: activeCategory === 'tokens' }"
+          class="menu-quick-action"
           data-testid="creation-category-tokens"
-          @click="activeCategory = 'tokens'"
+          @click="activeView = 'tokens'"
         >
-          Tokens
+          <span aria-hidden="true">●</span>
+          <span><strong>Token erstellen</strong><small>Spieler oder Gegner</small></span>
         </button>
-      </div>
+      </section>
+      <button
+        v-else-if="tokenCreationEnabled"
+        type="button"
+        class="menu-back-button"
+        data-testid="creation-menu-back"
+        @click="activeView = 'quick'"
+      >
+        ← Auswahl
+      </button>
       <section
-        v-if="activeCategory === 'spells'"
+        v-if="activeView === 'spells'"
         class="spell-menu-category"
         aria-labelledby="spell-shapes-heading"
       >
@@ -178,7 +212,11 @@ const createQuickToken = (): void => {
           </button>
         </div>
       </section>
-      <section v-else class="spell-menu-category" aria-labelledby="token-creation-heading">
+      <section
+        v-else-if="activeView === 'tokens'"
+        class="spell-menu-category"
+        aria-labelledby="token-creation-heading"
+      >
         <h3 id="token-creation-heading">Token</h3>
         <div class="token-creation-options">
           <button
@@ -241,10 +279,10 @@ const createQuickToken = (): void => {
           </button>
         </template>
       </section>
-      <p v-if="activeCategory === 'spells'" class="spell-menu-hint">
+      <p v-if="activeView === 'spells'" class="spell-menu-hint">
         Form auswählen und auf der Karte absetzen. Danach direkt skalieren, drehen oder verschieben.
       </p>
-      <p v-else class="spell-menu-hint">
+      <p v-else-if="activeView === 'tokens'" class="spell-menu-hint">
         Der Token wird an der gedrückten Kartenposition erstellt.
       </p>
     </section>

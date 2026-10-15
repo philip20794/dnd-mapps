@@ -165,6 +165,108 @@ test('erstellt per Button eine neue Zufallskarte', async ({ page }) => {
   expect(pageErrors).toEqual([])
 })
 
+test('bearbeitet Objekte, Wände und Türen mit gemeinsamem Undo-Verlauf', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.goto('/')
+  await page.getByTestId('enter-map-editor').click()
+  await expect(page.getByTestId('map-editor-toolbar')).toBeVisible()
+
+  const canvas = page.getByTestId('map-canvas').locator('canvas')
+  const tapCanvas = async (xFactor: number, yFactor: number, pointerId: number) => {
+    await canvas.evaluate(
+      (element, input) => {
+        const bounds = element.getBoundingClientRect()
+        const init = {
+          bubbles: true,
+          cancelable: true,
+          pointerId: input.pointerId,
+          pointerType: 'mouse',
+          button: 0,
+          clientX: bounds.left + bounds.width * input.xFactor,
+          clientY: bounds.top + bounds.height * input.yFactor,
+        }
+        element.dispatchEvent(new PointerEvent('pointerdown', { ...init, buttons: 1 }))
+        window.dispatchEvent(new PointerEvent('pointerup', { ...init, buttons: 0 }))
+      },
+      { xFactor, yFactor, pointerId },
+    )
+  }
+
+  await page.getByTestId('map-editor-preset-small-crate').click()
+  await tapCanvas(0.5, 0.55, 701)
+  await expect(page.getByTestId('map-editor-properties')).toContainText('Objekt')
+  await page.getByTestId('map-editor-duplicate').click()
+  await page.getByTestId('map-editor-delete').click()
+  await page.keyboard.press('Control+z')
+  await expect(page.getByTestId('map-editor-redo')).toBeEnabled()
+
+  await page.getByTestId('map-editor-tool-wall').click()
+  await tapCanvas(0.42, 0.62, 702)
+  await tapCanvas(0.58, 0.62, 703)
+  await expect(page.getByTestId('map-editor-split-wall')).toBeVisible()
+
+  await page.getByTestId('map-editor-tool-door').click()
+  await tapCanvas(0.5, 0.62, 704)
+  await expect(page.getByTestId('map-editor-properties')).toContainText('Tür')
+  await expect(page.getByTestId('map-editor-save')).toBeEnabled()
+  expect(pageErrors).toEqual([])
+})
+
+test('malt und radiert Material per Touch als atomare Editoraktionen', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.goto('/')
+  await page.getByTestId('enter-map-editor').click()
+  await page.getByTestId('map-editor-tool-material-brush').click()
+  await page.getByTestId('map-editor-material-shallow-water').click()
+  await page.getByTestId('map-editor-brush-large').click()
+
+  const canvas = page.getByTestId('map-canvas').locator('canvas')
+  await canvas.evaluate(async (element) => {
+    const bounds = element.getBoundingClientRect()
+    const event = (type: string, x: number, buttons: number) =>
+      new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 801,
+        pointerType: 'touch',
+        isPrimary: true,
+        button: 0,
+        buttons,
+        clientX: bounds.left + bounds.width * x,
+        clientY: bounds.top + bounds.height * 0.58,
+      })
+    element.dispatchEvent(event('pointerdown', 0.4, 1))
+    window.dispatchEvent(event('pointermove', 0.62, 1))
+    window.dispatchEvent(event('pointerup', 0.68, 0))
+    await new Promise((resolve) => window.setTimeout(resolve, 50))
+  })
+
+  await expect(page.getByTestId('map-editor-undo')).toBeEnabled()
+  await page.getByTestId('map-editor-undo').click()
+  await expect(page.getByTestId('map-editor-redo')).toBeEnabled()
+  await page.getByTestId('map-editor-redo').click()
+  await page.getByTestId('map-editor-tool-material-eraser').click()
+  await canvas.evaluate((element) => {
+    const bounds = element.getBoundingClientRect()
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 802,
+      pointerType: 'touch',
+      isPrimary: true,
+      button: 0,
+      clientX: bounds.left + bounds.width * 0.52,
+      clientY: bounds.top + bounds.height * 0.58,
+    }
+    element.dispatchEvent(new PointerEvent('pointerdown', { ...options, buttons: 1 }))
+    window.dispatchEvent(new PointerEvent('pointerup', { ...options, buttons: 0 }))
+  })
+  await expect(page.getByTestId('map-editor-undo')).toBeEnabled()
+  expect(pageErrors).toEqual([])
+})
+
 test('verarbeitet synthetisches Zwei-Finger-Pan und Pinch-Zoom', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
@@ -204,9 +306,19 @@ test('verarbeitet synthetisches Zwei-Finger-Pan und Pinch-Zoom', async ({ page }
     dispatch(window, 'pointermove', 102, 340, 120, 1)
     dispatch(window, 'pointerup', 102, 340, 120, 0)
     dispatch(window, 'pointerup', 101, 90, 120, 0)
+
+    dispatch(element, 'pointerdown', 103, 120, 160, 1)
+    dispatch(element, 'pointerdown', 104, 220, 160, 1)
+    dispatch(window, 'pointermove', 104, 120, 260, 1)
+    dispatch(window, 'pointerup', 104, 120, 260, 0)
+    dispatch(window, 'pointerup', 103, 120, 160, 0)
   })
 
   await expect(page.getByTestId('zoom-status')).not.toHaveText(zoomBefore ?? '')
+  await expect(page.getByTestId('rotate-map-button')).toHaveAttribute(
+    'aria-label',
+    /aktuell 90 Grad/,
+  )
   const zoomAfter = await page.getByTestId('zoom-status').textContent()
   await page.waitForTimeout(500)
   await page.reload()
@@ -298,6 +410,8 @@ test('erstellt einen Spieler über das freie Long-Press-Menü', async ({ page })
   })
 
   await expect(page.getByTestId('spell-radial-menu')).toBeVisible()
+  await expect(page.getByTestId('creation-category-spells')).toBeVisible()
+  await expect(page.getByTestId('creation-category-tokens')).toBeVisible()
   await page.getByTestId('creation-category-tokens').click()
   await page.getByTestId('quick-token-player').click()
   await page.getByTestId('create-quick-token').click()
@@ -305,6 +419,81 @@ test('erstellt einen Spieler über das freie Long-Press-Menü', async ({ page })
   await expect(page.getByTestId('spell-radial-menu')).toBeHidden()
   await expect(page.getByTestId('token-name-input')).toHaveValue('Spieler')
   expect(pageErrors).toEqual([])
+})
+
+test('shows compact token actions before detailed properties', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('toggle-sidebar-button').click()
+  await page.getByTestId('token-template-hero').evaluate((element) => {
+    element.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 151,
+        pointerType: 'touch',
+      }),
+    )
+  })
+
+  const overlay = page.getByTestId('token-placement-overlay')
+  await overlay.evaluate((element) => {
+    const bounds = element.getBoundingClientRect()
+    element.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 152,
+        pointerType: 'touch',
+        button: 0,
+        buttons: 1,
+        clientX: bounds.left + bounds.width * 0.55,
+        clientY: bounds.top + bounds.height * 0.55,
+      }),
+    )
+  })
+  await expect(page.getByTestId('token-properties')).toBeVisible()
+
+  const canvas = page.getByTestId('map-canvas').locator('canvas')
+  await canvas.evaluate(async (element) => {
+    const bounds = element.getBoundingClientRect()
+    const clientX = bounds.left + bounds.width * 0.55
+    const clientY = bounds.top + bounds.height * 0.55
+    element.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 153,
+        pointerType: 'touch',
+        button: 0,
+        buttons: 1,
+        clientX,
+        clientY,
+      }),
+    )
+    await new Promise((resolve) => window.setTimeout(resolve, 560))
+    window.dispatchEvent(
+      new PointerEvent('pointerup', {
+        bubbles: true,
+        cancelable: true,
+        pointerId: 153,
+        pointerType: 'touch',
+        button: 0,
+        buttons: 0,
+        clientX,
+        clientY,
+      }),
+    )
+  })
+
+  const menu = page.getByTestId('token-context-menu')
+  await expect(menu).toBeVisible()
+  await expect(menu.getByTestId('token-context-duplicate')).toBeVisible()
+  await expect(menu.getByTestId('token-context-properties')).toBeVisible()
+  await menu.getByTestId('token-context-properties').click()
+  await expect(menu.getByTestId('token-context-color-input')).toBeVisible()
+  await menu.getByTestId('token-context-properties-back').click()
+  await page.getByTestId('token-context-backdrop').click({ position: { x: 2, y: 2 } })
+  await expect(menu).toBeHidden()
 })
 
 async function expectInsideViewport(

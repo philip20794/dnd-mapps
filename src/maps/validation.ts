@@ -107,6 +107,23 @@ export const validateMapDefinition = (
     if (!objectIds.has(door.id)) {
       errors.push(`Tür "${door.id}" hat kein zugehöriges Kartenobjekt mit derselben ID.`)
     }
+    const doorLength = Math.hypot(
+      door.segment.b.x - door.segment.a.x,
+      door.segment.b.y - door.segment.a.y,
+    )
+    if (doorLength <= 0.0001) errors.push(`Tür "${door.id}" hat keine gültige Breite.`)
+    if (
+      door.segment.a.x < 0 ||
+      door.segment.a.y < 0 ||
+      door.segment.b.x < 0 ||
+      door.segment.b.y < 0 ||
+      door.segment.a.x > map.width ||
+      door.segment.b.x > map.width ||
+      door.segment.a.y > map.height ||
+      door.segment.b.y > map.height
+    ) {
+      errors.push(`Tür "${door.id}" liegt außerhalb der Karte.`)
+    }
   }
 
   for (const door of map.doors) {
@@ -115,7 +132,15 @@ export const validateMapDefinition = (
     }
   }
 
+  const wallIds = new Set<string>()
   for (const wall of map.walls) {
+    if (wall.id) {
+      if (wallIds.has(wall.id)) errors.push(`Wand-ID "${wall.id}" ist doppelt vorhanden.`)
+      wallIds.add(wall.id)
+    }
+    if (Math.hypot(wall.b.x - wall.a.x, wall.b.y - wall.a.y) <= 0.0001) {
+      errors.push(`Wandsegment "${wall.id ?? `${wall.a.x},${wall.a.y}`}" hat keine Länge.`)
+    }
     if (
       wall.a.x < 0 ||
       wall.a.y < 0 ||

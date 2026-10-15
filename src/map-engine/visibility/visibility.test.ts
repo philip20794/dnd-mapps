@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { MapDefinition } from '@/maps/api'
 import type { PlacedToken } from '@/types/tokens'
+import { resolveFogVisibilityTokens } from '@/map-engine/fog/fogState'
 import {
   combineVisibilityPolygons,
   combineVisibilityPolygonsWithLights,
@@ -478,6 +479,45 @@ describe('Sichtberechnung', () => {
     ])
     expect(polygons.some((polygon) => polygonContainsPoint(polygon, { x: 8.8, y: 8.8 }))).toBe(
       false,
+    )
+  })
+
+  it('aktiviert Licht und Tageslicht in Einzelsicht nur über den gewählten Spieler', () => {
+    const openMap: MapDefinition = { ...baseMap, walls: [], doors: [] }
+    const distantPlayer = { ...token('distant', 1, 1), visionRange: 2 }
+    const litPlayer = { ...token('lit', 8, 8), visionRange: 2 }
+    const lights = [
+      { id: 'torch', position: { x: 8, y: 7 }, range: 2 } as const,
+      { kind: 'daylight-area', id: 'sun', bounds: { x: 7, y: 7, width: 2, height: 2 } } as const,
+    ]
+    const geometry = prepareVisibilityGeometry(openMap, {})
+
+    const distantFields = combineVisibilityFieldsWithPreparedGeometry(
+      resolveFogVisibilityTokens([distantPlayer, litPlayer], {
+        kind: 'player',
+        tokenId: distantPlayer.id,
+      }),
+      openMap,
+      geometry,
+      lights,
+    )
+    const litFields = combineVisibilityFieldsWithPreparedGeometry(
+      resolveFogVisibilityTokens([distantPlayer, litPlayer], {
+        kind: 'player',
+        tokenId: litPlayer.id,
+      }),
+      openMap,
+      geometry,
+      lights,
+    )
+
+    expect(distantFields).toHaveLength(1)
+    expect(litFields).toHaveLength(3)
+    expect(
+      distantFields.some((field) => polygonContainsPoint(field.polygon, { x: 8.8, y: 8.8 })),
+    ).toBe(false)
+    expect(litFields.some((field) => polygonContainsPoint(field.polygon, { x: 8.8, y: 8.8 }))).toBe(
+      true,
     )
   })
 })

@@ -26,6 +26,7 @@ const createSnapshot = (): SessionSnapshot => ({
     },
   ],
   doorStatesByMap: { 'alte-krypta': { 'door-south-crypt': 'open' } },
+  customMaps: [],
   fog: { ...defaultFogState, enabled: true },
   settings: structuredClone(defaultRuntimeSettings),
   savedAt: new Date('2026-07-14T10:00:00Z').toISOString(),
@@ -82,5 +83,13 @@ describe('SessionPersistence', () => {
     const migrated = migrateSessionSnapshot(legacy)
     expect(migrated.version).toBe(SESSION_SCHEMA_VERSION)
     expect(migrated.fog.exploredMasksByMap['alte-krypta:ground']?.cellCount).toBe(4)
+    expect(migrated.fog.visibilityMode).toEqual({ kind: 'shared' })
+    expect(migrated.customMaps).toEqual([])
+  })
+
+  it('migriert Sitzungen der Version 2 ohne eigene Karten', () => {
+    const migrated = migrateSessionSnapshot({ ...createSnapshot(), version: 2 })
+    expect(migrated.version).toBe(SESSION_SCHEMA_VERSION)
+    expect(migrated.customMaps).toEqual([])
   })
 })
