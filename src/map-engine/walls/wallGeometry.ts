@@ -73,8 +73,8 @@ export function selectVisibleWallSections(
   walls: readonly WallDefinition[],
   visibleBlockers: readonly VisibleVisibilityBlocker[],
 ): readonly VisibleWallSection[] {
-  const byId = new Map(
-    walls.map((wall, index) => [`wall:${wall.id ?? index}`, wall] as const),
+  const byId = new Map<string, WallDefinition>(
+    walls.map((wall, index) => [`wall:${wall.id ?? index}`, wall]),
   )
   return visibleBlockers.flatMap((blocker) => {
     if (blocker.kind !== 'wall') return []
