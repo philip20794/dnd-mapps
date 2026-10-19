@@ -149,7 +149,7 @@ export function addWall(
   if (segmentLength(segment) <= EPSILON) return null
   const id = uniqueId(map, 'wall')
   return {
-    map: { ...map, walls: [...map.walls, { id, levelId, ...segment, ...defaults }] },
+    map: { ...map, walls: [...map.walls, { id, levelId, ...segment, ...defaults, appearance: 'stone' as const }] },
     selection: { kind: 'wall', id },
   }
 }

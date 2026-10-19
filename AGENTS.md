@@ -214,3 +214,12 @@ Für neue Generatorstufen sind insbesondere Tests auf deterministische Gleichhei
 ## Arbeitsweise
 
 Vor einer Änderung betroffene Datenflüsse und Tests prüfen. Kleine, reversible Schritte bevorzugen. Generatorlogik zuerst als reine Funktionen und Datenverträge testen; erst danach in `TabletopView` oder die Engine integrieren. Keine MapEngine-Neuschreibung, wenn eine neue Generatorstufe lediglich eine valide `MapDefinition` liefern muss.
+
+
+## Verbindliche Regeln für wiederverwendbare Grafik und CI/CD
+
+- Bäume, Felsen, Mauern, Deko und interaktive Objekte sind zentral registrierte Map Objects mit Presets; neue Karten verwenden dieselben Renderer. Keine kopierten objektbezogenen Grafikimplementierungen in Map-Dateien.
+- Bodenmaterial bleibt im Materialsystem. Dekorative Walls verwenden `WallDefinition.appearance` und die gemeinsamen Module `src/map-engine/walls/`; die Geometrie für Bewegung, Türen und Sicht bleibt davon unabhängig. Bei Stiländerungen deterministische Tests und Sichtprüfung ergänzen.
+- Neue Darstellungen müssen eine nachvollziehbare Materialwirkung (Form, Struktur, Kantenlicht, Schatten) liefern, lesbar bei üblichen Zoomstufen sein und große Karten nicht unnötig verlangsamen. Details siehe `docs/VISUAL-COMPONENTS.md`.
+- Jede KI-Änderung erfolgt als Pull Request nach `main`. **Wenn der gesamte PR-Test-/Build-Workflow grün ist, wird der nicht als Draft markierte PR automatisch als Squash gemergt**. Dafür `auto-merge-green-pr.yml` beibehalten; kein händisches Mergen eines roten PRs. Der Merge löst über `firebase-hosting.yml` den erneuten Build und danach Firebase Hosting aus. Secrets gehören ausschließlich in GitHub Actions.
+- Keine parallelen Firebase-CLI-Deploy-Workflows einchecken; es darf nur einen Live-Deployment-Pfad geben.

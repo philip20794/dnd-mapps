@@ -583,6 +583,7 @@ function mergeBoundarySegments(
                 : { x: fixed, y: previous + 1 },
             blocksSight,
             blocksMovement,
+            appearance: 'cave',
           })
         }
         start = value

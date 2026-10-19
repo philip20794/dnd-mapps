@@ -12,7 +12,11 @@ export interface MapLevelDefinition {
   readonly order?: number
 }
 
+export type WallAppearance = 'stone' | 'cave'
+
 export interface WallDefinition extends Segment {
+  /** Optional artwork. Walls without an appearance remain invisible collision / sight geometry. */
+  readonly appearance?: WallAppearance
   readonly id?: string
   readonly levelId?: string
   readonly blocksSight: boolean
