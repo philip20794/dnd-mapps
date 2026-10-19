@@ -37,6 +37,12 @@ npm run test:e2e
 npm run build
 ```
 
+## CI und Firebase Hosting
+
+Die Pipeline [Build and deploy Firebase Hosting](.github/workflows/firebase-hosting.yml) testet und baut Pull Requests nach `main`. Nach einem Merge nach `main` veröffentlicht sie den geprüften Build automatisch auf Firebase Hosting, sobald der Firebase-Service-Account als GitHub-Secret konfiguriert wurde.
+
+Die einmalige Einrichtung und die benötigten GitHub-Variablen sind in [docs/FIREBASE-CI.md](docs/FIREBASE-CI.md) beschrieben.
+
 ## Architektur
 
 - `src/views`: einzige Kartenansicht
@@ -140,7 +146,7 @@ Sicht und Licht sind getrennt:
 - Licht zeichnet weiche radiale Lichtscheine für Fackeln und Feuerstellen.
 - Fog of War unterscheidet aktuell sichtbar, bereits erkundet und unbekannt.
 
-Wenn Fog deaktiviert ist, bleibt die Karte vollständig sichtbar. Wenn Fog aktiviert ist, verdecken unbekannte Bereiche alle darunterliegenden Layer. Optional kann Erkundung gespeichert oder nur aktuelle Sicht angezeigt werden.
+Wenn Fog deaktiviert ist, bleibt die Karte vollständig sichtbar. Wenn Fog aktiviert ist, verdecken unbekannte Bereiche alle darunterliegenden Layer. Standardmäßig wird nur die aktuelle Sicht angezeigt. Eine Speicherung bereits erkundeter Bereiche kann bei Bedarf aktiviert werden.
 
 ## Lokales Speicherformat
 
@@ -152,7 +158,7 @@ Der Zustand wird versioniert in IndexedDB gespeichert:
 - Fog-Einstellungen und erkundete Polygone
 - Kamera, Raster, Animationen und Beleuchtung
 
-Das aktuelle Schema ist `version: 1`.
+Das aktuelle Schema ist `version: 4`.
 
 ## Aktueller Funktionsumfang
 
