@@ -24,7 +24,7 @@ const persistentFogState = { ...defaultFogState, persistExploration: true }
 describe('Fog of War Zustand', () => {
   it('zeigt standardmäßig ausschließlich die aktuelle Sicht', () => {
     expect(defaultFogState.persistExploration).toBe(false)
-    expect(recordExploration(persistentFogState, 'map:ground', [square(0)])).toBe(defaultFogState)
+    expect(recordExploration(defaultFogState, 'map:ground', [square(0)])).toBe(defaultFogState)
   })
 
   it('speichert erkundete Sicht als Rastermaske', () => {
