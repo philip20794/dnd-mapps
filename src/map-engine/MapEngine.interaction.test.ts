@@ -650,6 +650,50 @@ describe('MapEngine Token-/Zauberflächen-Interaktion', () => {
     vi.useRealTimers()
   })
 
+  it.each(['mouse', 'pen'])(
+    'öffnet das freie Kartenmenü auch nach einem langen %s-Druck',
+    (pointerType) => {
+      vi.useFakeTimers()
+      const callbacks = handlers()
+      const engine = new MapEngine(document.createElement('div'), callbacks)
+      engine.setMap(map, {})
+
+      invokePointerHandler(engine, 'handlePointerDown', pointerEvent(100, 100, 120, pointerType))
+      vi.advanceTimersByTime(519)
+      expect(callbacks.onMapLongPress).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(1)
+
+      expect(callbacks.onMapLongPress).toHaveBeenCalledOnce()
+      expect(callbacks.onMapLongPress).toHaveBeenCalledWith(
+        expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }),
+        { x: 100, y: 120 },
+      )
+      invokePointerHandler(engine, 'handlePointerUp', pointerEvent(100, 100, 120, pointerType))
+      engine.destroy()
+      vi.useRealTimers()
+    },
+  )
+
+  it('bricht einen langen Mausklick bei Bewegung oder Loslassen ab', () => {
+    vi.useFakeTimers()
+    const callbacks = handlers()
+    const engine = new MapEngine(document.createElement('div'), callbacks)
+    engine.setMap(map, {})
+
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(101, 100, 120))
+    invokePointerHandler(engine, 'handlePointerMove', pointerEvent(101, 108, 120))
+    vi.advanceTimersByTime(520)
+
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(101, 108, 120))
+    invokePointerHandler(engine, 'handlePointerDown', pointerEvent(102, 100, 120))
+    invokePointerHandler(engine, 'handlePointerUp', pointerEvent(102, 100, 120))
+    vi.advanceTimersByTime(520)
+
+    expect(callbacks.onMapLongPress).not.toHaveBeenCalled()
+    engine.destroy()
+    vi.useRealTimers()
+  })
+
   it('verwirft den Karten-Long-Press bei Bewegung, zweitem Finger und pointercancel', () => {
     vi.useFakeTimers()
     const callbacks = handlers()
