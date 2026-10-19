@@ -427,6 +427,28 @@ test('erstellt einen Spieler über das freie Long-Press-Menü', async ({ page })
   expect(pageErrors).toEqual([])
 })
 
+test('öffnet das freie Token-Menü per langem Linksklick und platziert einen Gegner', async ({
+  page,
+}) => {
+  await page.goto('/')
+  const canvas = page.getByTestId('map-canvas').locator('canvas')
+  await expect(canvas).toBeVisible()
+  const bounds = await canvas.boundingBox()
+  expect(bounds).not.toBeNull()
+
+  await page.mouse.move(bounds!.x + bounds!.width * 0.7, bounds!.y + bounds!.height * 0.7)
+  await page.mouse.down()
+  await page.waitForTimeout(560)
+  await expect(page.getByTestId('spell-radial-menu')).toBeVisible()
+  await page.mouse.up()
+
+  await page.getByTestId('creation-category-tokens').click()
+  await page.getByTestId('quick-token-monster').click()
+  await page.getByTestId('create-quick-token').click()
+  await expect(page.getByTestId('spell-radial-menu')).toBeHidden()
+  await expect(page.getByTestId('token-name-input')).toHaveValue('Gegner')
+})
+
 test('shows compact token actions before detailed properties', async ({ page }) => {
   await page.goto('/')
   await page.getByTestId('toggle-sidebar-button').click()
