@@ -1,7 +1,8 @@
 import { Graphics } from 'pixi.js'
 import type { WallDefinition } from '@/maps/api'
+import type { Segment } from '@/types/geometry'
 import { shiftColor } from '@/map-objects/visualStyle'
-import { compileWallVisual, type WallVisual } from './wallGeometry'
+import { compileWallVisual, visibleWallRange, type WallVisual } from './wallGeometry'
 
 interface Point {
   readonly x: number
@@ -19,12 +20,19 @@ function segment(graphics: Graphics, a: Point, b: Point, color: number, width: n
   graphics.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ color, width, alpha })
 }
 
-function drawStone(graphics: Graphics, wall: WallVisual, index: number, gridSize: number): void {
+function drawStone(
+  graphics: Graphics,
+  wall: WallVisual,
+  index: number,
+  gridSize: number,
+  visibleStart: number,
+  visibleEnd: number,
+): void {
   const stone = wall.stones[index]!
   const cave = wall.appearance === 'cave'
   const gap = Math.min(gridSize * 0.025, (stone.end - stone.start) * 0.1)
-  const start = stone.start + gap
-  const end = stone.end - gap
+  const start = Math.max(stone.start + gap, visibleStart)
+  const end = Math.min(stone.end - gap, visibleEnd)
   if (end <= start) return
 
   const half = wall.thickness * (cave ? 0.5 + stone.notch * 0.22 : 0.47)
@@ -59,15 +67,25 @@ function drawStone(graphics: Graphics, wall: WallVisual, index: number, gridSize
   }
 }
 
-/** Renders only opt-in visual walls, leaving collision, doors and line-of-sight unchanged. */
-export function renderWallSurfaces(walls: readonly WallDefinition[], gridSize: number): Graphics {
-  const graphics = new Graphics({ label: 'decorative-wall-surfaces' })
-  graphics.eventMode = 'none'
-  for (const wall of walls) {
-    const visual = compileWallVisual(wall, gridSize)
+/**
+ * Both the normal map layer and the Fog overlay use the same original masonry geometry.
+ * Fog receives only visible intervals, so hidden walls remain hidden.
+ */
+export function drawWallSurfaces(
+  graphics: Graphics,
+  sections: readonly { readonly wall: WallDefinition; readonly visibleSegment?: Segment }[],
+  gridSize: number,
+): void {
+  for (const section of sections) {
+    const visual = compileWallVisual(section.wall, gridSize)
     if (!visual) continue
-    const first = at(visual, 0, 0)
-    const last = at(visual, visual.length, 0)
+    const range = section.visibleSegment
+      ? visibleWallRange(visual, section.visibleSegment, gridSize)
+      : { start: 0, end: visual.length }
+    if (range.end <= range.start) continue
+
+    const first = at(visual, range.start, 0)
+    const last = at(visual, range.end, 0)
     // Soft offset shadow, dark foundation and edge-lighting are shared by all stone variants.
     segment(graphics, { x: first.x + gridSize * 0.055, y: first.y + gridSize * 0.075 },
       { x: last.x + gridSize * 0.055, y: last.y + gridSize * 0.075 },
@@ -77,11 +95,18 @@ export function renderWallSurfaces(walls: readonly WallDefinition[], gridSize: n
       visual.appearance === 'cave' ? 0x393837 : 0x474747, visual.thickness, 0.98)
 
     for (let index = 0; index < visual.stones.length; index += 1) {
-      drawStone(graphics, visual, index, gridSize)
+      drawStone(graphics, visual, index, gridSize, range.start, range.end)
     }
-    segment(graphics, at(visual, 0, -visual.thickness * 0.52),
-      at(visual, visual.length, -visual.thickness * 0.52),
+    segment(graphics, at(visual, range.start, -visual.thickness * 0.52),
+      at(visual, range.end, -visual.thickness * 0.52),
       0xc7b8a5, Math.max(1, gridSize * 0.022), 0.38)
   }
+}
+
+/** Renders only opt-in visual walls, leaving collision, doors and line-of-sight unchanged. */
+export function renderWallSurfaces(walls: readonly WallDefinition[], gridSize: number): Graphics {
+  const graphics = new Graphics({ label: 'decorative-wall-surfaces' })
+  graphics.eventMode = 'none'
+  drawWallSurfaces(graphics, walls.map((wall) => ({ wall })), gridSize)
   return graphics
 }

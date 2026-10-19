@@ -1,5 +1,6 @@
 import type { WallAppearance, WallDefinition } from '@/maps/api'
-import type { GridPoint } from '@/types/geometry'
+import type { GridPoint, Segment } from '@/types/geometry'
+import type { VisibleVisibilityBlocker } from '@/map-engine/visibility/visibility'
 import { hashString, randomRange } from '@/map-objects/visualStyle'
 
 /** Pure, deterministic geometry for the reusable masonry renderer. Grid units remain unchanged. */
@@ -57,5 +58,53 @@ export function compileWallVisual(wall: WallDefinition, gridSize: number): WallV
     length,
     thickness: gridSize * (cave ? 0.55 : 0.43),
     stones,
+  }
+}
+
+
+/** An actually observed piece of a painted wall. Sight-blocking geometry itself is never expanded. */
+export interface VisibleWallSection {
+  readonly blockerId: string
+  readonly wall: WallDefinition
+  readonly visibleSegment: Segment
+}
+
+export function selectVisibleWallSections(
+  walls: readonly WallDefinition[],
+  visibleBlockers: readonly VisibleVisibilityBlocker[],
+): readonly VisibleWallSection[] {
+  const byId = new Map(
+    walls.map((wall, index) => [`wall:${wall.id ?? index}`, wall] as const),
+  )
+  return visibleBlockers.flatMap((blocker) => {
+    if (blocker.kind !== 'wall') return []
+    const wall = byId.get(blocker.blockerId)
+    return wall?.appearance
+      ? [{ blockerId: blocker.blockerId, wall, visibleSegment: blocker.visibleSegment }]
+      : []
+  })
+}
+
+/**
+ * Clip the decoration to the observed portion of the ORIGINAL wall.
+ * The original stone positions and colors stay stable when the hero moves.
+ * A tiny overlap closes cracks at the edge without revealing room geometry.
+ */
+export function visibleWallRange(
+  wall: WallVisual,
+  visibleSegment: Segment,
+  gridSize: number,
+): { readonly start: number; readonly end: number } {
+  function projection(point: GridPoint): number {
+    const x = point.x * gridSize - wall.origin.x
+    const y = point.y * gridSize - wall.origin.y
+    return x * wall.direction.x + y * wall.direction.y
+  }
+  const a = projection(visibleSegment.a)
+  const b = projection(visibleSegment.b)
+  const padding = gridSize * 0.04
+  return {
+    start: Math.max(0, Math.min(wall.length, Math.min(a, b) - padding)),
+    end: Math.max(0, Math.min(wall.length, Math.max(a, b) + padding)),
   }
 }

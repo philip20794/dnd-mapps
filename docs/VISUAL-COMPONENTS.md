@@ -54,3 +54,22 @@ PR-Workflow, sucht den noch offenen, nicht als Entwurf markierten PR mit exakt
 dem geprüften Head-Commit, und merged ihn als Squash. Das löst den Push-Workflow
 aus. Weil ein mit dem integrierten GitHub-Token ausgeführter Merge keinen Push-Workflow\nauslöst, startet der Merge-Workflow `firebase-hosting.yml` anschließend ausdrücklich per\n`workflow_dispatch`. Fehlgeschlagene Prüfungen blockieren den Merge.
 Es wird kein ungeprüfter PR-Code in einem privilegierten Workflow ausgeführt.
+
+
+## Sichtbare Maueroberflächen am Fog-Rand
+
+Die normale Fog-Sicht und die Bewegungskollision bleiben am tatsächlichen
+Wandsegment stehen. Die bereits berechneten `visibleBlockers` enthalten jedoch
+diejenigen Wand-Teilstücke, die ein Held tatsächlich sehen kann. Der FogRenderer
+zeichnet **nur diese sichtbaren Teilstücke** nochmals mit dem gemeinsamen
+`drawWallSurfaces`-Renderer über die Fog-Textur. Dadurch sind Steinoberfläche,
+Fugen und Mauerstärke auch am Sichtabbruch erkennbar. Nur an den Schnittenden
+werden 0,04 Rastereinheiten (ca. 6 cm bei einem 1,5-m-Rasterfeld) überlappt,
+um kleine Darstellungsrisse zu vermeiden.
+
+Die vollständige Wandposition und ihre zufälligen Steinvarianten werden dabei
+weiter vom ursprünglichen Wandsegment abgeleitet, nicht von der Sichtöffnung.
+So verändern sich Fugen und Farben nicht, wenn Spieler Tokens bewegen.
+Nicht sichtbare Wände und Inhalte hinter der Mauer werden **nicht** aufgehellt.
+Für nicht dekorierte Sichtblocker und Türen bleibt die vorhandene Kontrastlinie.
+Die Erkundungsmaske und die Sichtfeld-Rasterisierung werden nicht verändert.
