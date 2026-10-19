@@ -9,6 +9,7 @@ on:
       - completed
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -50,5 +51,10 @@ jobs:
             if (!result.data.merged) {
               core.setFailed(`PR #${pr.number} could not be merged: ${result.data.message}`);
             } else {
-              core.notice(`Merged PR #${pr.number} after passing tests and build.`);
+              // Merges made with GITHUB_TOKEN do not trigger on: push workflows.
+              // workflow_dispatch is explicitly allowed and publishes the verified merge.
+              await github.rest.actions.createWorkflowDispatch({
+                owner, repo, workflow_id: 'firebase-hosting.yml', ref: 'main'
+              });
+              core.notice(`Merged PR #${pr.number} and dispatched Firebase build/deploy.`);
             }

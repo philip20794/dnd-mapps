@@ -52,5 +52,5 @@ baut und deployed anschließend das Artefakt.
 `.github/workflows/auto-merge-green-pr.yml` reagiert auf den erfolgreichen
 PR-Workflow, sucht den noch offenen, nicht als Entwurf markierten PR mit exakt
 dem geprüften Head-Commit, und merged ihn als Squash. Das löst den Push-Workflow
-und damit den Hosting-Deploy aus. Fehlgeschlagene Prüfungen blockieren den Merge.
+aus. Weil ein mit dem integrierten GitHub-Token ausgeführter Merge keinen Push-Workflow\nauslöst, startet der Merge-Workflow `firebase-hosting.yml` anschließend ausdrücklich per\n`workflow_dispatch`. Fehlgeschlagene Prüfungen blockieren den Merge.
 Es wird kein ungeprüfter PR-Code in einem privilegierten Workflow ausgeführt.
