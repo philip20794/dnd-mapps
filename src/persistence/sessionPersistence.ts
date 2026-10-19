@@ -29,7 +29,7 @@ const createEmptySnapshot = (): SessionSnapshot => ({
 })
 
 interface StoredSessionSnapshot {
-  readonly version: 1 | 2 | 3
+  readonly version: 1 | 2 | 3 | 4
   readonly selectedMapId: string | null
   readonly tokens: SessionSnapshot['tokens']
   readonly spellEffects?: SessionSnapshot['spellEffects']
@@ -49,7 +49,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const isStoredSessionSnapshot = (value: unknown): value is StoredSessionSnapshot => {
   if (!isRecord(value)) return false
   return (
-    (value.version === 1 || value.version === 2 || value.version === 3) &&
+    (value.version === 1 || value.version === 2 || value.version === 3 || value.version === 4) &&
     Array.isArray(value.tokens) &&
     typeof value.savedAt === 'string' &&
     isRecord(value.doorStatesByMap) &&
@@ -61,11 +61,14 @@ export const migrateSessionSnapshot = (value: unknown): SessionSnapshot => {
   if (!isStoredSessionSnapshot(value)) {
     throw new Error('Der gespeicherte Sitzungszustand ist beschädigt.')
   }
+  const fog = migrateFogState(value.fog)
   return {
     ...value,
     version: SESSION_SCHEMA_VERSION,
     customMaps: Array.isArray(value.customMaps) ? value.customMaps : [],
-    fog: migrateFogState(value.fog),
+    // Prior versions enabled persistent exploration by default. Switch existing
+    // sessions to current visibility once; explicit choices made in v4 are retained.
+    fog: value.version < 4 ? { ...fog, persistExploration: false } : fog,
   }
 }
 
