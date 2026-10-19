@@ -228,6 +228,39 @@ describe('MapEngine Fog-Aktualisierung', () => {
     engine.destroy()
   })
 
+  it('verwendet auch in gemeinsamer Sicht keine früheren Erkundungsdaten, wenn deaktiviert', () => {
+    const onExplore = vi.fn<MapEngineHandlers['onExplore']>()
+    const engine = new MapEngine(document.createElement('div'), createHandlers(onExplore))
+    const explored = addPolygonsToExplorationMask(createEmptyExplorationMask(), [
+      [
+        { x: 0, y: 0 },
+        { x: 12, y: 0 },
+        { x: 12, y: 12 },
+        { x: 0, y: 12 },
+      ],
+    ])
+    engine.setMap(map, {})
+    engine.setTokens([token(3, 'hero-left'), token(9, 'hero-right')], null)
+    engine.setFogState({
+      enabled: true,
+      persistExploration: false,
+      visibilityMode: sharedFogVisibilityMode,
+      explored,
+    })
+
+    expect(Reflect.get(engine, 'currentVisibilityFields')).toHaveLength(2)
+    expect(renderSpy.mock.calls.at(-1)?.[2]).toMatchObject({
+      persistExploration: false,
+      explored: null,
+    })
+    engine.setTokens([token(5, 'hero-left'), token(9, 'hero-right')], null)
+    expect(renderSpy.mock.calls.at(-1)?.[2]).toMatchObject({
+      persistExploration: false,
+      explored: null,
+    })
+    engine.destroy()
+  })
+
   it('zeigt im Spielermodus nur dessen aktuelle Sicht und verwendet keine gemeinsame Erkundung', () => {
     const onExplore = vi.fn<MapEngineHandlers['onExplore']>()
     const engine = new MapEngine(document.createElement('div'), createHandlers(onExplore))

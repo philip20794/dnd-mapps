@@ -45,7 +45,7 @@ describe('SessionPersistence', () => {
     const snapshot = {
       ...createSnapshot(),
       fog: recordExploration(
-        { ...defaultFogState, enabled: true },
+        { ...defaultFogState, enabled: true, persistExploration: true },
         'alte-krypta:ground',
         [[
           { x: 0, y: 0 },
@@ -82,6 +82,7 @@ describe('SessionPersistence', () => {
     }
     const migrated = migrateSessionSnapshot(legacy)
     expect(migrated.version).toBe(SESSION_SCHEMA_VERSION)
+    expect(migrated.fog.persistExploration).toBe(false)
     expect(migrated.fog.exploredMasksByMap['alte-krypta:ground']?.cellCount).toBe(4)
     expect(migrated.fog.visibilityMode).toEqual({ kind: 'shared' })
     expect(migrated.customMaps).toEqual([])
@@ -91,5 +92,30 @@ describe('SessionPersistence', () => {
     const migrated = migrateSessionSnapshot({ ...createSnapshot(), version: 2 })
     expect(migrated.version).toBe(SESSION_SCHEMA_VERSION)
     expect(migrated.customMaps).toEqual([])
+  })
+
+  it('stellt in bestehenden Version-3-Sitzungen nur noch die aktuelle Sicht dar', () => {
+    const old = {
+      ...createSnapshot(),
+      version: 3,
+      fog: {
+        ...defaultFogState,
+        enabled: true,
+        persistExploration: true,
+      },
+    }
+    const migrated = migrateSessionSnapshot(old)
+
+    expect(migrated.fog.enabled).toBe(true)
+    expect(migrated.fog.persistExploration).toBe(false)
+    expect(migrated.fog.visibilityMode).toEqual({ kind: 'shared' })
+  })
+
+  it('behält eine bewusst aktivierte Erkundung beim Laden einer Version-4-Sitzung', () => {
+    const current = {
+      ...createSnapshot(),
+      fog: { ...defaultFogState, persistExploration: true },
+    }
+    expect(migrateSessionSnapshot(current).fog.persistExploration).toBe(true)
   })
 })

@@ -257,6 +257,17 @@ describe('FogRenderer Sichtweitenübergang', () => {
     expect(pixels[11]).toBe(255)
   })
 
+  it('verdeckt zuvor gesehene Felder vollständig ohne aktive Erkundungsspeicherung', () => {
+    const visibleCells = new Uint16Array([0, FOG_INVISIBLE_CELL, FOG_INVISIBLE_CELL])
+    const pixels = new Uint8ClampedArray(12)
+
+    writeFogPixels(visibleCells, 3, 1, null, pixels, false)
+
+    expect(pixels[3]).toBe(0)
+    expect(pixels[7]).toBe(255)
+    expect(pixels[11]).toBe(255)
+  })
+
   it('hellt unbekanntes Gebiet auch zwischen erkundeten und unbekannten Texeln nicht auf', () => {
     const visibleCells = new Uint16Array([0, 0, FOG_INVISIBLE_CELL, FOG_INVISIBLE_CELL])
     const pixels = new Uint8ClampedArray(16)

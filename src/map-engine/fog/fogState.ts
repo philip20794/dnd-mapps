@@ -38,7 +38,7 @@ interface LegacyFogStateData {
 
 export const defaultFogState: FogStateData = {
   enabled: false,
-  persistExploration: true,
+  persistExploration: false,
   visibilityMode: sharedFogVisibilityMode,
   exploredMasksByMap: {},
 }

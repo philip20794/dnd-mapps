@@ -5,7 +5,7 @@ import type { RuntimeSettings } from './settings'
 import type { PlacedToken } from './tokens'
 import type { PlacedSpellEffect } from './spells'
 
-export const SESSION_SCHEMA_VERSION = 3
+export const SESSION_SCHEMA_VERSION = 4
 
 export interface SessionSnapshot {
   readonly version: typeof SESSION_SCHEMA_VERSION
