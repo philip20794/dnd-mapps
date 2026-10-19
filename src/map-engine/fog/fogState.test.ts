@@ -19,9 +19,16 @@ function square(x: number, y = 0) {
   ]
 }
 
+const persistentFogState = { ...defaultFogState, persistExploration: true }
+
 describe('Fog of War Zustand', () => {
+  it('zeigt standardmäßig ausschließlich die aktuelle Sicht', () => {
+    expect(defaultFogState.persistExploration).toBe(false)
+    expect(recordExploration(persistentFogState, 'map:ground', [square(0)])).toBe(defaultFogState)
+  })
+
   it('speichert erkundete Sicht als Rastermaske', () => {
-    const state = recordExploration(defaultFogState, 'map:ground', [square(0)])
+    const state = recordExploration(persistentFogState, 'map:ground', [square(0)])
     const mask = state.exploredMasksByMap['map:ground']
     expect(mask?.cellCount).toBe(4)
     expect(isExploredCell(mask ?? null, 0, 0)).toBe(true)
@@ -37,12 +44,12 @@ describe('Fog of War Zustand', () => {
   })
 
   it('fügt identische Zellen nicht erneut hinzu', () => {
-    const state = recordExploration(defaultFogState, 'map:ground', [square(0)])
+    const state = recordExploration(persistentFogState, 'map:ground', [square(0)])
     expect(recordExploration(state, 'map:ground', [square(0)])).toBe(state)
   })
 
   it('behält Erkundung nach mehr als 160 Schritten vollständig', () => {
-    let state = defaultFogState
+    let state = persistentFogState
     for (let index = 0; index < 200; index += 1) {
       state = recordExploration(state, 'map:ground', [square(index)])
     }
@@ -53,7 +60,7 @@ describe('Fog of War Zustand', () => {
   })
 
   it('trennt Karten und Ebenen voneinander', () => {
-    let state = recordExploration(defaultFogState, 'map-a:ground', [square(0)])
+    let state = recordExploration(persistentFogState, 'map-a:ground', [square(0)])
     state = recordExploration(state, 'map-a:cellar', [square(4)])
     state = recordExploration(state, 'map-b:ground', [square(8)])
     expect(Object.keys(state.exploredMasksByMap)).toEqual([
@@ -65,7 +72,7 @@ describe('Fog of War Zustand', () => {
   })
 
   it('setzt erkundete Bereiche pro Karte zurück', () => {
-    const state = recordExploration(defaultFogState, 'map:ground', [square(0)])
+    const state = recordExploration(persistentFogState, 'map:ground', [square(0)])
     expect(clearExplorationForMap(state, 'map:ground').exploredMasksByMap['map:ground']).toBeUndefined()
   })
 
@@ -82,7 +89,7 @@ describe('Fog of War Zustand', () => {
   })
 
   it('liefert aktuelle Sicht und persistierte Maske getrennt', () => {
-    const state = recordExploration(defaultFogState, 'map:ground', [square(0)])
+    const state = recordExploration(persistentFogState, 'map:ground', [square(0)])
     const result = visibleAndExploredPolygons(state, 'map:ground', [square(2)])
     expect(result.visible).toHaveLength(1)
     expect(result.explored?.cellCount).toBe(4)
