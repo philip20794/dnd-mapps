@@ -79,6 +79,7 @@ import type { FogLightSource } from './lighting/lightSources'
 import { MapEditorController } from './editor/MapEditorController'
 import type { MapEditorSelection, MapEditorState } from '@/map-editor/types'
 import { MaterialRenderer, type RenderedMaterialLayers } from './materials/MaterialRenderer'
+import { renderWallSurfaces } from './walls/WallRenderer'
 import {
   createStaticObjectChunks,
   isStaticChunkCandidate,
@@ -546,6 +547,12 @@ export class MapEngine {
     this.drawBackgroundAndGrid(this.map)
     this.drawMaterials(this.map)
     this.drawSpawnPoints(this.map)
+    this.layers.wallsDoors.addChild(
+      renderWallSurfaces(
+        this.map.walls.filter((wall) => this.isOnCurrentLevel(wall)),
+        this.map.gridSize,
+      ),
+    )
 
     const renderContext = {
       gridSize: this.map.gridSize,

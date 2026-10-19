@@ -148,8 +148,9 @@ export function addWall(
   const segment = { a: clampPoint(a, map), b: clampPoint(b, map) }
   if (segmentLength(segment) <= EPSILON) return null
   const id = uniqueId(map, 'wall')
+  const newWall: WallDefinition = { id, levelId, ...segment, ...defaults, appearance: 'stone' }
   return {
-    map: { ...map, walls: [...map.walls, { id, levelId, ...segment, ...defaults }] },
+    map: { ...map, walls: [...map.walls, newWall] },
     selection: { kind: 'wall', id },
   }
 }

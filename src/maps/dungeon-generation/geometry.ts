@@ -37,6 +37,7 @@ const cellsToRuns = (
 const mergeBoundarySegments = (
   cells: ReadonlySet<string>,
   levelId: string,
+  appearance: 'stone' | 'cave',
 ): readonly WallDefinition[] => {
   const horizontal = new Map<number, number[]>()
   const vertical = new Map<number, number[]>()
@@ -64,6 +65,7 @@ const mergeBoundarySegments = (
           walls.push({
             id: `dungeon-wall-${levelId}-${sequence}`,
             levelId,
+            appearance,
             a: orientation === 'h' ? { x: start, y: fixed } : { x: fixed, y: start },
             b: orientation === 'h' ? { x: previous + 1, y: fixed } : { x: fixed, y: previous + 1 },
             blocksSight: true,
@@ -238,7 +240,7 @@ export const createGraphFirstDungeon = (
     blocksMovementWhenClosed: true,
   }))
   const walls = [...walkableByLevel.entries()].flatMap(([levelId, cells]) =>
-    mergeBoundarySegments(cells, levelId),
+    mergeBoundarySegments(cells, levelId, cave ? 'cave' : 'stone'),
   )
   const dressing = createDungeonSetDressing({
     plan,

@@ -65,6 +65,7 @@ export const wallSegment = (
   b: { x: bx, y: by },
   blocksSight: true,
   blocksMovement: true,
+  appearance: 'stone',
 })
 
 export const torch = (
