@@ -105,13 +105,15 @@ describe('Burg Naerytar – Höhlen-Dungeon', () => {
     expect(outgoing.every((point) => point.x >= 16 && point.y <= 11)).toBe(true)
   })
 
-  it('modelliert einen dominanten, zusammenhängenden See mit Tiefwasser, Inseln und Brutstätte', () => {
+  it('modelliert einen dominanten See mit Tiefwasser, Inseln und separater Brutstätte', () => {
     expect(naerytarTerrainMetrics.lakeCells).toBeGreaterThan(240)
     expect(naerytarTerrainMetrics.deepWaterCells).toBeGreaterThan(90)
     expect(naerytarIslandCells.size).toBeGreaterThan(10)
     expect([...naerytarDeepWaterCells].every((cell) => naerytarLakeCells.has(cell))).toBe(true)
     expect([...naerytarIslandCells].every((cell) => !naerytarDeepWaterCells.has(cell))).toBe(true)
-    expect(canReach(centerKey(6), centerKey(8), naerytarLakeCells)).toBe(true)
+    // Area 8 is a separate breeding pool, reached over land rather than by open water.
+    expect(canReach(centerKey(6), centerKey(8), naerytarLakeCells)).toBe(false)
+    expect(canReach(centerKey(6), centerKey(8), naerytarWalkableCells)).toBe(true)
   })
 
   it('setzt Gameplay-Walls, den Kran, den Teleportkreis, Nebel und genau zwei Eingangslichter', () => {
