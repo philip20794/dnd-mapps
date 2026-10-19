@@ -1,6 +1,8 @@
 import { Container, Graphics, Sprite, Texture } from 'pixi.js'
 import type { MapDefinition } from '@/maps/api'
 import type { GridPoint, Polygon } from '@/types/geometry'
+import { drawWallSurfaces } from '@/map-engine/walls/WallRenderer'
+import { selectVisibleWallSections } from '@/map-engine/walls/wallGeometry'
 import {
   combineVisibleBlockers,
   polygonContainsPoint,
@@ -447,8 +449,13 @@ export class FogRenderer {
       return
     }
 
+    const visibleWallSections = selectVisibleWallSections(map.walls, blockers)
+    const decoratedIds = new Set(visibleWallSections.map((section) => section.blockerId))
+    drawWallSurfaces(overlay, visibleWallSections, map.gridSize)
+    // Plain line-only blockers and closed doors keep their existing high-contrast outline.
+    const outlineBlockers = blockers.filter((blocker) => !decoratedIds.has(blocker.blockerId))
     const drawPaths = (): void => {
-      for (const blocker of blockers) {
+      for (const blocker of outlineBlockers) {
         overlay
           .moveTo(
             blocker.visibleSegment.a.x * map.gridSize,
@@ -461,8 +468,9 @@ export class FogRenderer {
       }
     }
 
-    drawPaths()
-    overlay.stroke({
+    if (outlineBlockers.length > 0) {
+      drawPaths()
+      overlay.stroke({
       color: 0x20170f,
       width: Math.max(2, map.gridSize * VISIBLE_BLOCKER_OUTLINE_WIDTH),
       alpha: 0.92,
@@ -473,6 +481,7 @@ export class FogRenderer {
       width: Math.max(1.25, map.gridSize * VISIBLE_BLOCKER_HIGHLIGHT_WIDTH),
       alpha: 0.98,
     })
+    }
     this.hasVisibleBlockers = true
     overlay.visible = true
   }
