@@ -251,13 +251,15 @@ describe('MapEngine Fog-Aktualisierung', () => {
     expect(Reflect.get(engine, 'currentVisibilityFields')).toHaveLength(2)
     expect(renderSpy.mock.calls.at(-1)?.[2]).toMatchObject({
       persistExploration: false,
-      explored: null,
     })
+    // The historical mask may still exist; FogRenderer ignores it when disabled.
+    expect(renderSpy.mock.calls.at(-1)?.[2]?.explored).toBe(explored)
     engine.setTokens([token(5, 'hero-left'), token(9, 'hero-right')], null)
     expect(renderSpy.mock.calls.at(-1)?.[2]).toMatchObject({
       persistExploration: false,
-      explored: null,
     })
+    // The historical mask may still exist; FogRenderer ignores it when disabled.
+    expect(renderSpy.mock.calls.at(-1)?.[2]?.explored).toBe(explored)
     engine.destroy()
   })
 
