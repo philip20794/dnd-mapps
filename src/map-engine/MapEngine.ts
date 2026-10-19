@@ -1389,12 +1389,23 @@ export class MapEngine {
         this.touchCameraRotationRemainder = 0
       }
       if (this.touchCameraGesture.size === 1 && position) {
-        this.beginMapLongPress(event.pointerId, local, position)
+        this.beginMapLongPress(event.pointerId, local, position, true)
       } else {
         this.clearMapLongPress()
       }
       this.capturePointer(event.pointerId)
       event.preventDefault()
+      return
+    }
+    if (event.button === 0 && this.map && !this.spacePressed) {
+      const position = this.clientToGridPoint(event.clientX, event.clientY, false)
+      if (position) {
+        const bounds = this.host.getBoundingClientRect()
+        const local = clientToLocal({ x: event.clientX, y: event.clientY }, bounds)
+        this.beginMapLongPress(event.pointerId, local, position, false)
+        this.capturePointer(event.pointerId)
+        event.preventDefault()
+      }
       return
     }
     if (event.button !== 1 && event.button !== 2 && !this.spacePressed) {
@@ -1406,6 +1417,18 @@ export class MapEngine {
   }
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
+    if (this.mapLongPress?.pointerId === event.pointerId) {
+      const bounds = this.host.getBoundingClientRect()
+      const local = clientToLocal({ x: event.clientX, y: event.clientY }, bounds)
+      if (
+        Math.hypot(
+          local.x - this.mapLongPress.startScreen.x,
+          local.y - this.mapLongPress.startScreen.y,
+        ) > 7
+      ) {
+        this.clearMapLongPress(event.pointerId)
+      }
+    }
     if (this.editorTouchStart?.pointerId === event.pointerId) {
       this.editorTouchStart.screen = { x: event.clientX, y: event.clientY }
     }
@@ -1486,15 +1509,6 @@ export class MapEngine {
     if (this.touchCameraGesture.has(event.pointerId)) {
       const bounds = this.host.getBoundingClientRect()
       const local = clientToLocal({ x: event.clientX, y: event.clientY }, bounds)
-      if (
-        this.mapLongPress?.pointerId === event.pointerId &&
-        Math.hypot(
-          local.x - this.mapLongPress.startScreen.x,
-          local.y - this.mapLongPress.startScreen.y,
-        ) > 7
-      ) {
-        this.clearMapLongPress(event.pointerId)
-      }
       this.touchCameraGesture.move(event.pointerId, local)
       this.scheduleTouchCameraUpdate()
       event.preventDefault()
@@ -1680,7 +1694,12 @@ export class MapEngine {
     this.tokenRenderer.cancelPointerInteraction()
   }
 
-  private beginMapLongPress(pointerId: number, screenPoint: PixelPoint, position: GridPoint): void {
+  private beginMapLongPress(
+    pointerId: number,
+    screenPoint: PixelPoint,
+    position: GridPoint,
+    fromTouch: boolean,
+  ): void {
     this.clearMapLongPress()
     const state: MapLongPressState = {
       pointerId,
@@ -1691,8 +1710,8 @@ export class MapEngine {
     state.timer = window.setTimeout(() => {
       if (
         this.mapLongPress !== state ||
-        this.touchCameraGesture.size !== 1 ||
-        !this.touchCameraGesture.has(pointerId) ||
+        (fromTouch &&
+          (this.touchCameraGesture.size !== 1 || !this.touchCameraGesture.has(pointerId))) ||
         this.tokenRenderer.isPointerActive ||
         this.spellEffectInteraction ||
         this.spellPlacement
@@ -1701,9 +1720,11 @@ export class MapEngine {
         return
       }
       this.mapLongPress = null
-      this.touchCameraGesture.remove(pointerId)
-      this.cancelTouchCameraFrame()
-      this.touchCameraRotationRemainder = 0
+      if (fromTouch) {
+        this.touchCameraGesture.remove(pointerId)
+        this.cancelTouchCameraFrame()
+        this.touchCameraRotationRemainder = 0
+      }
       this.handlers.onMapLongPress(position, screenPoint)
     }, 520)
     this.mapLongPress = state
