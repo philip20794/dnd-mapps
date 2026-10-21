@@ -1,0 +1,25 @@
+name: Hybrid KI LAN checks
+
+on:
+  push:
+    branches:
+      - feature/ki-api-hybrid-map-generation
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm install --prefix worker --no-package-lock --ignore-scripts
+      - run: npm run test:unit -- --run
+      - run: npm run test:lan
+      - run: npm run build:lan

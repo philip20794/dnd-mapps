@@ -15,9 +15,11 @@ export const normalizeMapGenerationRequest = (
   request: MapGenerationRequest,
 ): MapGenerationRequest => {
   const biomes = selected(request.biomes, request.biome)
-  const themes = selected(request.themes, request.theme).filter((theme) => theme !== 'none')
+  const noSettlement = request.theme === 'none' || request.themes?.includes('none') === true
+  const noWater = request.water === 'none' || request.waterFeatures?.includes('none') === true
+  const themes = noSettlement ? [] : selected(request.themes, request.theme).filter((theme) => theme !== 'none')
   const features = unique(request.features ?? [])
-  const waterFeatures = selected(request.waterFeatures, request.water).filter(
+  const waterFeatures = noWater ? [] : selected(request.waterFeatures, request.water).filter(
     (feature) => feature !== 'none',
   ) as readonly WaterPreference[]
 
@@ -28,7 +30,7 @@ export const normalizeMapGenerationRequest = (
     ...(features.length === 0 ? { features: undefined } : { features }),
     ...(waterFeatures.length === 0 ? { waterFeatures: undefined } : { waterFeatures }),
     biome: undefined,
-    theme: undefined,
-    water: undefined,
+    theme: noSettlement ? 'none' : undefined,
+    water: noWater ? 'none' : undefined,
   }
 }

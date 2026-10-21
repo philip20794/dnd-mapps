@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { LocalMapPlanner } from './localPlanner.js'
 import { MapGenerationService, withoutMapGenerationSeed } from './service.js'
 import { AiMapPlannerClientError, HttpAiMapPlannerClient, type AiMapPlannerClient } from './aiPlannerClient.js'
+import { validateMapDefinition } from '@/maps/validation'
+import { createDefaultObjectRegistry } from '@/map-objects'
 
 const seedSequence = (...seeds: number[]): (() => number) => {
   let index = 0
@@ -33,6 +35,12 @@ describe('MapGenerationService', () => {
       plan: { seed: 91, schemaVersion: 1 },
     })
     expect(result.map.generation?.plan).toEqual(result.plan)
+  })
+
+  it('liefert einen validierten lokalen MapDefinition-Output', async () => {
+    const service = new MapGenerationService()
+    const result = await service.generate({ seed: 27, mapType: 'dungeon' })
+    expect(validateMapDefinition(result.map, createDefaultObjectRegistry())).toEqual([])
   })
 
   it('wählt bei aktivierter KI den entfernten Planner und validiert dessen Plan', async () => {

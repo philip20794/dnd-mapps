@@ -1,4 +1,8 @@
 import type { MapDefinition, MapGenerationMetadata } from '@/maps/api'
+import { createDefaultObjectRegistry } from '@/map-objects'
+import { validateMapDefinition, MapValidationError } from '@/maps/validation'
+import { chooseBestLocalPlan, assessMapPlanQuality } from './quality.js'
+import { KiApiMapPlannerClient } from './kiPlannerClient.js'
 import { LocalMapPlanner } from './localPlanner.js'
 import { createMapDefinitionFromPlan } from './mapDefinitionAdapter.js'
 import { normalizeMapGenerationRequest } from './normalization.js'
@@ -56,7 +60,10 @@ const metadataFor = (
 export class MapGenerationService {
   public constructor(
     private readonly localPlanner = new LocalMapPlanner(),
-    private readonly aiPlanner: AiMapPlannerClient = new HttpAiMapPlannerClient(),
+    private readonly aiPlanner: AiMapPlannerClient =
+      import.meta.env.VITE_AI_PROVIDER === 'ki-api'
+        ? new KiApiMapPlannerClient()
+        : new HttpAiMapPlannerClient(),
     private readonly createSeed: MapGenerationSeedGenerator = createMapGenerationSeed,
   ) {}
 
@@ -72,6 +79,8 @@ export class MapGenerationService {
       const remote = await this.aiPlanner.plan(request)
       const plan = parseMapPlan(remote.plan)
       if (plan.seed !== request.seed) throw new Error('KI-Plan hat einen abweichenden Seed.')
+      if (assessMapPlanQuality(plan).unreachableNodeIds.length > 0)
+        throw new Error('KI-Plan enthält unerreichbare Räume oder Areale.')
       const planner = remote.source
       return this.fromPlan(request, plan, planner, remote.debug)
     } catch (error) {
@@ -110,7 +119,7 @@ export class MapGenerationService {
     planner: MapGenerationMetadata['planner'] = 'local',
     debug?: RemoteAiPlanResult['debug'],
   ): MapGenerationResult {
-    return this.fromPlan(request, parseMapPlan(this.localPlanner.plan(request)), planner, debug)
+    return this.fromPlan(request, chooseBestLocalPlan(request, this.localPlanner), planner, debug)
   }
 
   private fromPlan(
@@ -120,12 +129,10 @@ export class MapGenerationService {
     debug?: RemoteAiPlanResult['debug'],
   ): MapGenerationResult {
     const metadata = metadataFor(request, plan, planner, debug)
-    return {
-      map: createMapDefinitionFromPlan(plan, metadata),
-      request,
-      plan,
-      planner,
-    }
+    const map = createMapDefinitionFromPlan(plan, metadata)
+    const errors = validateMapDefinition(map, createDefaultObjectRegistry())
+    if (errors.length > 0) throw new MapValidationError(map.id, errors)
+    return { map, request, plan, planner }
   }
 }
 

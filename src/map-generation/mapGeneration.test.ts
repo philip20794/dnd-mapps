@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { LocalMapPlanner } from './localPlanner.js'
 import {
   MAP_PLAN_SCHEMA_VERSION,
   MapGenerationValidationError,
@@ -127,5 +128,16 @@ describe('Map-Generation-Domain', () => {
         'startArea.targetId referenziert kein bekanntes Element.',
       ]),
     )
+  })
+})
+
+describe('explicit none preferences', () => {
+  it('preserves no-water and no-settlement wishes through normalization', () => {
+    const normalized = normalizeMapGenerationRequest({ mapType: 'outdoor', water: 'none', theme: 'none' })
+    expect(normalized.water).toBe('none')
+    expect(normalized.theme).toBe('none')
+    const plan = new LocalMapPlanner().plan(normalized)
+    expect(plan.theme.waterFeatures).toEqual([])
+    expect(plan.theme.settlements).toEqual([])
   })
 })

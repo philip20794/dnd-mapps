@@ -97,6 +97,7 @@ const terrains: readonly Choice<Terrain>[] = [
   { value: 'mixed', label: 'Gemischt' },
 ]
 
+const isLanKiApi = import.meta.env.VITE_AI_PROVIDER === 'ki-api'
 const request = ref<MapGenerationRequest>(normalizeMapGenerationRequest(props.modelValue))
 const aiUsage = ref<AiUsageSnapshot | null>(null)
 const aiUsageState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
@@ -180,7 +181,7 @@ const summary = computed(() =>
     ? 'Ohne Vorgaben entscheidet der Planner über Typ, Umgebung und Aufbau.'
     : 'Nicht gesetzte Werte ergänzt der Planner später automatisch.',
 )
-const aiUsageVisible = computed(() => props.open && request.value.aiEnabled)
+const aiUsageVisible = computed(() => props.open && request.value.aiEnabled && !isLanKiApi)
 const aiUsageResetTime = computed(() =>
   aiUsage.value ? formatLocalResetTime(aiUsage.value.period.endUtc) : '',
 )
@@ -287,13 +288,14 @@ onBeforeUnmount(() => {
             data-testid="generation-ai-luna"
             @click="commit({ ...request, aiEnabled: true })"
           >
-            Luna
+            {{ isLanKiApi ? 'Lokale KI' : 'Luna' }}
           </button>
         </div>
-        <small>Luna wird über den Cloudflare Worker angefragt; die lokale Planung bleibt verfügbar.</small>
+        <small v-if="isLanKiApi">Deine ki-api wird über den lokalen Server angefragt. Bei Fehlern bleibt die lokale Planung verfügbar.</small>
+        <small v-else>Luna wird über den Cloudflare Worker angefragt; die lokale Planung bleibt verfügbar.</small>
       </section>
 
-      <section v-if="request.aiEnabled" class="generation-ai-usage" aria-live="polite" data-testid="ai-usage-panel">
+      <section v-if="request.aiEnabled && !isLanKiApi" class="generation-ai-usage" aria-live="polite" data-testid="ai-usage-panel">
         <strong>Luna</strong>
         <p v-if="aiUsageState === 'loading'" class="generation-ai-usage-muted" data-testid="ai-usage-loading">
           API-Verbrauch wird geladen …

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createLocalMapPlan, validateMapPlan } from './index.js'
+import { chooseBestLocalPlan, assessMapPlanQuality } from './quality.js'
 
 describe('LocalMapPlanner', () => {
   it('plant dieselbe Anfrage mit demselben Seed identisch', () => {
@@ -55,5 +56,24 @@ describe('LocalMapPlanner', () => {
     const plan = createLocalMapPlan({ seed: 11, mapType: 'outdoor', water: 'none', theme: 'none' })
     expect(plan.theme.waterFeatures).toEqual([])
     expect(plan.theme.settlements).toEqual([])
+  })
+})
+
+describe('quality-selected local map planning', () => {
+  it('is deterministic, seed-preserving and connected', () => {
+    for (const seed of [1, 2, 42, 1000]) {
+      const request = { seed, mapType: 'dungeon' as const, dungeon: { roomCount: 12 } }
+      const plan = chooseBestLocalPlan(request)
+      expect(plan).toEqual(chooseBestLocalPlan(request))
+      expect(plan.seed).toBe(seed)
+      expect(validateMapPlan(plan)).toEqual([])
+      expect(assessMapPlanQuality(plan).unreachableNodeIds).toEqual([])
+    }
+  })
+
+  it('reports a disconnected room without changing any map', () => {
+    const plan = createLocalMapPlan({ seed: 12, mapType: 'dungeon' })
+    const disconnected = { ...plan, connections: [] }
+    expect(assessMapPlanQuality(disconnected).unreachableNodeIds.length).toBeGreaterThan(0)
   })
 })

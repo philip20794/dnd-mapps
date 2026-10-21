@@ -1,5 +1,11 @@
 # DnD Mapps
 
+> **Eigene KI im Heimnetz:** Die optionale Integration der lokalen `ki-api` samt
+> sicherem Node-Proxy, qualitativ verbesserter lokaler Kartenplanung und Tests
+> ist in [docs/KI-API-LAN-INTEGRATION.md](docs/KI-API-LAN-INTEGRATION.md) beschrieben.
+> Die Firebase-/Cloudflare-Version bleibt separat nutzbar.
+
+
 DnD Mapps ist ein lokaler virtueller Spieltisch für Dungeons & Dragons und ähnliche Tabletop-Rollenspiele. Es gibt bewusst nur eine Kartenansicht, kein Backend, keine Benutzerverwaltung, keine Rollen und keine Mehrspieler-Synchronisierung.
 
 Eine ausführliche Beschreibung der Bedienung, Architektur, Beispielkarte und Zufallskarten-Erzeugung steht in [`docs/WEBAPP-FUNKTIONSWEISE.md`](docs/WEBAPP-FUNKTIONSWEISE.md).
