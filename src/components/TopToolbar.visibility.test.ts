@@ -133,6 +133,7 @@ describe('TopToolbar Sichtmodus', () => {
 
     const wrapper = mountToolbar()
     try {
+      await flushPromises()
       const button = wrapper.get('[data-testid="fullscreen-button"]')
       expect(button.attributes('disabled')).toBeUndefined()
       await button.trigger('click')
