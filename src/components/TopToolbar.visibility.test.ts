@@ -1,5 +1,5 @@
-import { mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TopToolbar from './TopToolbar.vue'
 
 const players = [
@@ -92,4 +92,68 @@ describe('TopToolbar Sichtmodus', () => {
     expect(wrapper.get('[data-testid="map-select"]').attributes('disabled')).toBeDefined()
     expect(wrapper.text()).toContain('Bearbeitungsmodus')
   })
+
+  it('keeps the menu button visible while controls are collapsed', async () => {
+    const wrapper = mountToolbar()
+    await wrapper.setProps({ toolbarCollapsed: true })
+
+    expect(wrapper.get('[data-testid="toggle-toolbar-button"]').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.get('.tabletop-menu-layer').isVisible()).toBe(false)
+
+    await wrapper.get('[data-testid="toggle-toolbar-button"]').trigger('click')
+    expect(wrapper.emitted('toggleToolbar')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('enters and exits browser fullscreen via the menu', async () => {
+    let activeElement: Element | null = null
+    const previousElement = Object.getOwnPropertyDescriptor(document, 'fullscreenElement')
+    const previousRequest = Object.getOwnPropertyDescriptor(document.documentElement, 'requestFullscreen')
+    const previousExit = Object.getOwnPropertyDescriptor(document, 'exitFullscreen')
+    const requestFullscreen = vi.fn(async () => {
+      activeElement = document.documentElement
+      document.dispatchEvent(new Event('fullscreenchange'))
+    })
+    const exitFullscreen = vi.fn(async () => {
+      activeElement = null
+      document.dispatchEvent(new Event('fullscreenchange'))
+    })
+    Object.defineProperty(document, 'fullscreenElement', {
+      configurable: true,
+      get: () => activeElement,
+    })
+    Object.defineProperty(document.documentElement, 'requestFullscreen', {
+      configurable: true,
+      value: requestFullscreen,
+    })
+    Object.defineProperty(document, 'exitFullscreen', {
+      configurable: true,
+      value: exitFullscreen,
+    })
+
+    const wrapper = mountToolbar()
+    try {
+      const button = wrapper.get('[data-testid="fullscreen-button"]')
+      expect(button.attributes('disabled')).toBeUndefined()
+      await button.trigger('click')
+      await flushPromises()
+      expect(requestFullscreen).toHaveBeenCalledOnce()
+      expect(button.attributes('aria-pressed')).toBe('true')
+      expect(button.text()).toContain('verlassen')
+
+      await button.trigger('click')
+      await flushPromises()
+      expect(exitFullscreen).toHaveBeenCalledOnce()
+      expect(button.attributes('aria-pressed')).toBe('false')
+    } finally {
+      wrapper.unmount()
+      if (previousElement) Object.defineProperty(document, 'fullscreenElement', previousElement)
+      else Reflect.deleteProperty(document, 'fullscreenElement')
+      if (previousRequest) Object.defineProperty(document.documentElement, 'requestFullscreen', previousRequest)
+      else Reflect.deleteProperty(document.documentElement, 'requestFullscreen')
+      if (previousExit) Object.defineProperty(document, 'exitFullscreen', previousExit)
+      else Reflect.deleteProperty(document, 'exitFullscreen')
+    }
+  })
+
 })
