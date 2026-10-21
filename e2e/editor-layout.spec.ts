@@ -41,6 +41,13 @@ test('keeps a floating menu usable at target widths and browser zoom', async ({ 
   }
 
   await page.setViewportSize({ width: 1440, height: 900 })
+  await page.getByTestId('toggle-toolbar-button').click()
+  await page.getByTestId('map-select').selectOption('alte-krypta')
+  await expect(page.getByTestId('map-select')).toHaveValue('alte-krypta')
+  await expect(page.locator('.tabletop-menu-panel')).toBeHidden()
+  await page.getByTestId('toggle-toolbar-button').click()
+  await expect(page.getByTestId('fullscreen-button')).toBeAttached()
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.evaluate(() => {
     document.documentElement.style.zoom = '125%'
   })
