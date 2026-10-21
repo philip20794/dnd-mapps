@@ -16,16 +16,19 @@ async function expectWithinViewport(
   expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width)
 }
 
-test('keeps the compact top toolbar usable at target widths and browser zoom', async ({ page }) => {
+test('keeps a floating menu usable at target widths and browser zoom', async ({ page }) => {
   test.setTimeout(60_000)
   await page.setViewportSize({ width: widths[0], height: 760 })
   await page.goto('/')
   for (const width of widths) {
     await page.setViewportSize({ width, height: width < 700 ? 760 : 900 })
-    await expect(page.getByTestId('map-select')).toBeVisible()
+    await expect(page.getByTestId('map-select')).toBeHidden()
     await expect(page.getByTestId('toggle-toolbar-button')).toBeVisible()
+    const layoutBox = await page.locator('.main-layout').boundingBox()
+    expect(layoutBox!.y).toBe(0)
     await expectNoHorizontalOverflow(page)
     await page.getByTestId('toggle-toolbar-button').click()
+    await expect(page.getByTestId('map-select')).toBeVisible()
     await expect(page.getByTestId('fog-toggle')).toBeVisible()
     await expect(page.getByTestId('fog-visibility-mode')).toBeVisible()
     await expect(page.getByTestId('generate-random-map-button')).toBeVisible()
@@ -34,6 +37,7 @@ test('keeps the compact top toolbar usable at target widths and browser zoom', a
     expect(menuBox!.x).toBeGreaterThanOrEqual(0)
     expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(width)
     await page.getByTestId('toggle-toolbar-button').click()
+    await expect(page.getByTestId('map-select')).toBeHidden()
   }
 
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -48,6 +52,7 @@ test('captures play and editor layouts without covering the canvas', async ({ pa
   test.setTimeout(60_000)
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/')
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('map-select').selectOption('alte-krypta')
   await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('fog-toggle').check()
