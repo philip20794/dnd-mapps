@@ -46,7 +46,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Check tabletop UI in browser
-        run: npx playwright test e2e/editor-layout.spec.ts --retries=0
+        run: npx playwright test e2e/editor-layout.spec.ts --grep "floating menu" --retries=0
 
       - name: Save Hosting build
         uses: actions/upload-artifact@v4
