@@ -186,6 +186,7 @@ const aiUsageResetTime = computed(() =>
   aiUsage.value ? formatLocalResetTime(aiUsage.value.period.endUtc) : '',
 )
 const refreshAiUsage = async (force = false): Promise<void> => {
+  if (isLanKiApi) return
   // A completed AI generation may close the dialog immediately. A forced refresh
   // still records the latest usage for the next time it is opened.
   if ((!aiUsageVisible.value && !force) || aiUsageState.value === 'loading') return

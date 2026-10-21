@@ -23,7 +23,7 @@
     "format": "prettier --write --experimental-cli src/",
     "build:lan": "npm run type-check && vite build --mode lan",
     "start:lan": "node --env-file-if-exists=.env.lan.local lan-server/server.mjs",
-    "test:lan": "node --test lan-server/*.test.mjs"
+    "test:lan": "node --test lan-server/bridge-check.mjs"
   },
   "dependencies": {
     "idb": "^8.0.3",
