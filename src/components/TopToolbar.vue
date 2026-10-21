@@ -133,7 +133,7 @@ function openRandomMapConfig(): void {
 </script>
 
 <template>
-  <header class="toolbar tabletop-toolbar" data-testid="toolbar">
+  <div class="tabletop-floating-menu" data-testid="toolbar">
     <button
       type="button"
       class="icon-button tabletop-menu-toggle"
@@ -148,21 +148,7 @@ function openRandomMapConfig(): void {
         <path v-else d="M5 5l14 14M19 5L5 19" />
       </svg>
     </button>
-
-    <label class="toolbar-map-select tabletop-map-select" for="map-select">
-      <span class="visually-hidden">Karte</span>
-      <select
-        id="map-select"
-        data-testid="map-select"
-        :value="selectedMapId ?? ''"
-        :disabled="editorActive"
-        @change="emit('selectMap', ($event.target as HTMLSelectElement).value)"
-      >
-        <option v-for="map in maps" :key="map.id" :value="map.id">{{ map.name }}</option>
-      </select>
-    </label>
-    <span v-if="editorActive" class="tabletop-editor-indicator">Editor</span>
-  </header>
+  </div>
 
   <div v-show="!toolbarCollapsed" class="tabletop-menu-layer">
     <button
@@ -186,6 +172,20 @@ function openRandomMapConfig(): void {
         </div>
       </div>
       <div class="tabletop-menu-scroll">
+        <div class="toolbar-menu-section tabletop-map-section">
+    <label class="toolbar-map-select tabletop-map-select" for="map-select">
+      <span>Karte auswählen</span>
+      <select
+        id="map-select"
+        data-testid="map-select"
+        :value="selectedMapId ?? ''"
+        :disabled="editorActive"
+        @change="emit('selectMap', ($event.target as HTMLSelectElement).value); closeDrawer()"
+      >
+        <option v-for="map in maps" :key="map.id" :value="map.id">{{ map.name }}</option>
+      </select>
+    </label>
+        </div>
           <div v-if="!editorActive" class="toolbar-menu-section">
             <strong>Spiel</strong>
             <button
