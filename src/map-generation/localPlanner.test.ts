@@ -77,3 +77,11 @@ describe('quality-selected local map planning', () => {
     expect(assessMapPlanQuality(disconnected).unreachableNodeIds.length).toBeGreaterThan(0)
   })
 })
+
+describe('randomized map type distribution', () => {
+  it('keeps different map types even when choosing among quality candidates', () => {
+    const types = new Set(Array.from({ length: 80 }, (_, seed) =>
+      chooseBestLocalPlan({ seed }).theme.mapType))
+    expect(types.size).toBeGreaterThanOrEqual(7)
+  })
+})

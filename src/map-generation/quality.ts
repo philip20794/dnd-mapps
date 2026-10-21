@@ -50,11 +50,19 @@ export const chooseBestLocalPlan = (
 ): MapPlan => {
   if (request.seed === undefined) throw new Error('Quality selection needs an explicit seed.')
   const seed = request.seed
+  // Fix the original randomly selected map type/size. Otherwise the quality
+  // score would favor dungeons over outdoor maps simply because they have rooms.
+  const initial = parseMapPlan(planner.plan(request))
   const candidates = [seed, (seed ^ 0x9e3779b9) >>> 0, (seed ^ 0x85ebca6b) >>> 0]
   let best: MapPlan | undefined
   let bestScore = -Infinity
   for (const candidateSeed of candidates) {
-    const plan = parseMapPlan(planner.plan({ ...request, seed: candidateSeed }))
+    const plan = candidateSeed === seed ? initial : parseMapPlan(planner.plan({
+      ...request,
+      mapType: request.mapType ?? initial.theme.mapType,
+      size: request.size ?? initial.dimensions.size,
+      seed: candidateSeed,
+    }))
     const report = assessMapPlanQuality(plan)
     const score = report.unreachableNodeIds.length ? -Infinity : report.score
     if (!best || score > bestScore) {

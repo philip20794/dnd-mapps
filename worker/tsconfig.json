@@ -4,6 +4,9 @@
     "src/**/*.test.ts",
     "../src/**/*.test.ts",
     "../src/map-generation/aiPlannerClient.ts",
+    "../src/map-generation/kiPlannerClient.ts",
+    "../src/map-generation/kiDesign.ts",
+    "../src/map-generation/quality.ts",
     "../src/map-generation/mapDefinitionAdapter.ts",
     "../src/map-generation/service.ts"
   ],
