@@ -1,4 +1,11 @@
 import { expect, test } from '@playwright/test'
+import type { Page } from '@playwright/test'
+
+async function chooseMap(page: Page, mapId: string): Promise<void> {
+  await page.getByTestId('toggle-toolbar-button').click()
+  await page.getByTestId('map-select').selectOption(mapId)
+  await expect(page.locator('.tabletop-menu-panel')).toBeHidden()
+}
 
 test.use({ viewport: { width: 1440, height: 900 } })
 test.setTimeout(90_000)
@@ -13,7 +20,7 @@ test('benutzt die Beispielkarte ohne unbehandelte Seitenfehler', async ({ page }
   })
 
   await page.goto('/')
-  await page.getByTestId('map-select').selectOption('alte-krypta')
+  await chooseMap(page, 'alte-krypta')
   await expect(page.getByTestId('map-select')).toHaveValue('alte-krypta')
   await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('reset-menu-button').click()
@@ -75,7 +82,7 @@ test('zeigt die neue Kapitel-3-Waldwegkarte ohne Seitenfehler', async ({ page })
   })
 
   await page.goto('/')
-  await page.getByTestId('map-select').selectOption('kapitel-3-waldweg')
+  await chooseMap(page, 'kapitel-3-waldweg')
   await expect(page.getByTestId('map-select')).toHaveValue('kapitel-3-waldweg')
   await expect(page.getByTestId('map-canvas').locator('canvas')).toBeVisible()
 
@@ -92,7 +99,7 @@ test('zeigt die Kapitel-4-Spinnenwaldkarte ohne Seitenfehler', async ({ page }) 
   })
 
   await page.goto('/')
-  await page.getByTestId('map-select').selectOption('kapitel-4-spinnenwald-ueberfall')
+  await chooseMap(page, 'kapitel-4-spinnenwald-ueberfall')
   await expect(page.getByTestId('map-select')).toHaveValue('kapitel-4-spinnenwald-ueberfall')
   await expect(page.getByTestId('map-canvas').locator('canvas')).toBeVisible()
 
@@ -107,7 +114,7 @@ test('zeigt den Burg-Naerytar-Höhlen-Dungeon ohne Seitenfehler', async ({ page 
   })
 
   await page.goto('/')
-  await page.getByTestId('map-select').selectOption('burg-naerytar-dungeon')
+  await chooseMap(page, 'burg-naerytar-dungeon')
   await expect(page.getByTestId('map-select')).toHaveValue('burg-naerytar-dungeon')
   await expect(page.getByTestId('map-select').locator('option:checked')).toHaveText(
     'Burg Naerytar – Höhlen-Dungeon',
@@ -281,7 +288,7 @@ test('verarbeitet synthetisches Zwei-Finger-Pan und Pinch-Zoom', async ({ page }
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await page.goto('/')
-  await page.getByTestId('map-select').selectOption('alte-krypta')
+  await chooseMap(page, 'alte-krypta')
   const canvas = page.getByTestId('map-canvas').locator('canvas')
   await expect(canvas).toBeVisible()
   const zoomBefore = await page.getByTestId('zoom-status').textContent()
