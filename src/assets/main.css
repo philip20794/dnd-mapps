@@ -217,7 +217,7 @@ input[type='radio'] {
 .app-shell {
   position: relative;
   display: grid;
-  grid-template-rows: var(--toolbar-height) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   width: 100%;
   height: 100%;
   height: 100dvh;
@@ -2652,15 +2652,14 @@ textarea:focus-visible {
 
 
 /* Responsive tabletop menu */
-.tabletop-toolbar {
-  position: relative;
+.tabletop-floating-menu {
+  position: fixed;
   z-index: 61;
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  height: var(--toolbar-height);
-  padding: 6px 12px;
-  background: linear-gradient(180deg, #25252c, #1a1a20);
+  top: max(10px, env(safe-area-inset-top));
+  left: max(10px, env(safe-area-inset-left));
+  width: 46px;
+  height: 46px;
+  pointer-events: auto;
 }
 .tabletop-menu-toggle {
   display: grid;
@@ -2676,15 +2675,21 @@ textarea:focus-visible {
   color: var(--color-text);
   background: #35302a;
 }
-.tabletop-map-select {
-  display: block;
-  flex: 1 1 auto;
-  width: auto;
-  max-width: 520px;
+.tabletop-menu-panel .tabletop-map-select {
+  display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  max-width: none;
   min-width: 0;
 }
-.tabletop-map-select > span { display: none; }
-.tabletop-map-select select {
+.tabletop-menu-panel .tabletop-map-select > span {
+  display: block;
+  color: var(--color-muted-strong);
+  font-size: 12px;
+}
+.tabletop-menu-panel .tabletop-map-select select {
   display: block;
   width: 100%;
   min-width: 0;
@@ -2692,24 +2697,15 @@ textarea:focus-visible {
   padding: 0 36px 0 14px;
   border: 1px solid var(--color-border);
   border-radius: 11px;
-  background-color: #141419;
   color: var(--color-text);
+  background-color: #141419;
   font-size: 15px;
   font-weight: 600;
   text-overflow: ellipsis;
 }
-.tabletop-editor-indicator {
-  flex: 0 0 auto;
-  padding: 7px 10px;
-  border: 1px solid var(--color-border-gold);
-  border-radius: 999px;
-  color: var(--color-gold);
-  font-size: 12px;
-  font-weight: 700;
-}
 .tabletop-menu-layer {
   position: fixed;
-  inset: var(--toolbar-height) 0 0;
+  inset: 0;
   z-index: 60;
   pointer-events: none;
 }
@@ -2733,12 +2729,12 @@ textarea:focus-visible {
 }
 .tabletop-menu-panel {
   position: absolute;
-  top: 8px;
-  left: 12px;
+  top: max(64px, calc(env(safe-area-inset-top) + 62px));
+  left: max(10px, env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   width: min(420px, calc(100vw - 24px));
-  max-height: calc(100dvh - var(--toolbar-height) - 20px);
+  max-height: calc(100dvh - max(64px, calc(env(safe-area-inset-top) + 62px)) - 12px);
   min-height: 0;
   overflow: hidden;
   border: 1px solid var(--color-border-strong);
@@ -2887,17 +2883,13 @@ textarea:focus-visible {
   line-height: 1.4;
 }
 @media (max-width: 700px) {
-  .tabletop-toolbar {
-    gap: 8px;
-    padding: 6px 8px;
+  .tabletop-floating-menu {
+    top: max(8px, env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
   }
   .tabletop-menu-toggle { display: grid; }
-  .tabletop-map-select { min-width: 0; }
   .tabletop-menu-panel {
-    top: 6px;
     left: 6px;
     width: min(410px, calc(100vw - 12px));
-    max-height: calc(100dvh - var(--toolbar-height) - 12px);
   }
-  .tabletop-editor-indicator { padding: 7px 8px; }
 }
