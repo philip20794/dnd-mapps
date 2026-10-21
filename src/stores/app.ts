@@ -11,7 +11,7 @@ interface AppState {
 export const useAppStore = defineStore('app', {
   state: (): AppState => ({
     sidebarCollapsed: true,
-    toolbarCollapsed: false,
+    toolbarCollapsed: true,
     selectedTool: 'auswahl',
     error: null,
     status: 'Bereit',
@@ -21,11 +21,7 @@ export const useAppStore = defineStore('app', {
       this.sidebarCollapsed = !this.sidebarCollapsed
     },
     toggleToolbar(): void {
-      const collapsed = !this.toolbarCollapsed
-      this.toolbarCollapsed = collapsed
-      if (collapsed) {
-        this.sidebarCollapsed = true
-      }
+      this.toolbarCollapsed = !this.toolbarCollapsed
     },
     setError(message: string | null): void {
       this.error = message

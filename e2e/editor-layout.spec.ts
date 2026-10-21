@@ -16,44 +16,61 @@ async function expectWithinViewport(
   expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width)
 }
 
-test('keeps the compact top toolbar usable at target widths and browser zoom', async ({ page }) => {
+test('keeps a floating menu usable at target widths and browser zoom', async ({ page }) => {
   test.setTimeout(60_000)
   await page.setViewportSize({ width: widths[0], height: 760 })
   await page.goto('/')
   for (const width of widths) {
     await page.setViewportSize({ width, height: width < 700 ? 760 : 900 })
+    await expect(page.getByTestId('map-select')).toBeHidden()
+    await expect(page.getByTestId('toggle-toolbar-button')).toBeVisible()
+    const layoutBox = await page.locator('.main-layout').boundingBox()
+    expect(layoutBox!.y).toBe(0)
+    await expectNoHorizontalOverflow(page)
+    await page.getByTestId('toggle-toolbar-button').click()
     await expect(page.getByTestId('map-select')).toBeVisible()
     await expect(page.getByTestId('fog-toggle')).toBeVisible()
     await expect(page.getByTestId('fog-visibility-mode')).toBeVisible()
-    await expect(page.getByTestId('toolbar-more-button')).toBeVisible()
-    await expectNoHorizontalOverflow(page)
-    await page.getByTestId('toolbar-more-button').click()
     await expect(page.getByTestId('generate-random-map-button')).toBeVisible()
-    const menuBox = await page.locator('.toolbar-more-content').boundingBox()
+    const menuBox = await page.locator('.tabletop-menu-panel').boundingBox()
     expect(menuBox).not.toBeNull()
     expect(menuBox!.x).toBeGreaterThanOrEqual(0)
     expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(width)
-    await page.getByTestId('toolbar-more-button').click()
+    await page.getByTestId('toggle-toolbar-button').click()
+    await expect(page.getByTestId('map-select')).toBeHidden()
   }
 
   await page.setViewportSize({ width: 1440, height: 900 })
+  await page.getByTestId('toggle-toolbar-button').click()
+  await page.getByTestId('map-select').selectOption('alte-krypta')
+  await expect(page.getByTestId('map-select')).toHaveValue('alte-krypta')
+  await expect(page.locator('.tabletop-menu-panel')).toBeHidden()
+  await page.getByTestId('toggle-toolbar-button').click()
+  await expect(page.getByTestId('fullscreen-button')).toBeAttached()
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.evaluate(() => {
     document.documentElement.style.zoom = '125%'
   })
   await expectNoHorizontalOverflow(page)
-  await expect(page.getByTestId('toolbar-more-button')).toBeVisible()
+  await expect(page.getByTestId('toggle-toolbar-button')).toBeVisible()
 })
 
 test('captures play and editor layouts without covering the canvas', async ({ page }, testInfo) => {
   test.setTimeout(60_000)
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/')
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('map-select').selectOption('alte-krypta')
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('fog-toggle').check()
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.screenshot({ path: testInfo.outputPath('play-fog.png'), fullPage: true })
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('fog-toggle').uncheck()
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.screenshot({ path: testInfo.outputPath('play-no-fog.png'), fullPage: true })
 
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('enter-map-editor').click()
   await expect(page.getByTestId('map-editor-tool-wall')).toBeVisible()
   await page.getByTestId('map-editor-tool-wall').click()
@@ -76,13 +93,16 @@ test('captures play and editor layouts without covering the canvas', async ({ pa
 
   await page.getByTestId('map-editor-leave').click()
   await expect(page.getByTestId('map-editor-toolbar')).toBeHidden()
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('fog-toggle').check()
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.screenshot({ path: testInfo.outputPath('play-after-editor-fog.png'), fullPage: true })
 })
 
 test('keeps the editor canvas usable on a narrow touch viewport', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('enter-map-editor').click()
   await expect(page.getByTestId('map-editor-context-panel')).toBeHidden()
   await expect(page.getByTestId('map-editor-tool-wall')).toBeVisible()

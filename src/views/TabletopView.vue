@@ -860,7 +860,7 @@ async function importEditorMap(json: string): Promise<void> {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'toolbar-collapsed': appStore.toolbarCollapsed }">
+  <div class="app-shell">
     <TopToolbar
       :maps="mapStore.maps"
       :selected-map-id="mapStore.selectedMapId"

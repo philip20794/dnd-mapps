@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { FogVisibilityMode } from '@/map-engine/fog/fogState'
 import type { MapDefinition, MapLevelDefinition } from '@/maps/api'
 import type { MapRotation } from '@/types/settings'
@@ -59,7 +59,47 @@ const activeMapName = computed(
     'Karte',
 )
 const levelMenu = ref<HTMLDetailsElement | null>(null)
-const moreMenu = ref<HTMLDetailsElement | null>(null)
+const fullscreenActive = ref(false)
+const fullscreenSupported = ref(false)
+const fullscreenError = ref('')
+
+function updateFullscreenState(): void {
+  fullscreenActive.value = document.fullscreenElement === document.documentElement
+}
+
+function closeDrawer(): void {
+  if (!props.toolbarCollapsed) emit('toggleToolbar')
+}
+
+function handleEscape(event: KeyboardEvent): void {
+  if (event.key === 'Escape' && !props.toolbarCollapsed) closeDrawer()
+}
+
+async function toggleFullscreen(): Promise<void> {
+  if (!fullscreenSupported.value) return
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen()
+    else await document.documentElement.requestFullscreen()
+    fullscreenError.value = ''
+    updateFullscreenState()
+  } catch {
+    fullscreenError.value = 'Der Browser hat den Vollbildmodus nicht erlaubt.'
+  }
+}
+
+onMounted(() => {
+  fullscreenSupported.value =
+    typeof document.documentElement.requestFullscreen === 'function' &&
+    typeof document.exitFullscreen === 'function'
+  updateFullscreenState()
+  document.addEventListener('fullscreenchange', updateFullscreenState)
+  window.addEventListener('keydown', handleEscape)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('fullscreenchange', updateFullscreenState)
+  window.removeEventListener('keydown', handleEscape)
+})
 
 function updateFogVisibilityMode(event: Event): void {
   if (!(event.currentTarget instanceof HTMLSelectElement)) return
@@ -81,109 +121,120 @@ function selectLevel(levelId: string): void {
   if (levelMenu.value) levelMenu.value.open = false
 }
 
-function closeMoreMenu(): void {
-  if (moreMenu.value) moreMenu.value.open = false
-}
-
 function generateRandomMap(): void {
   emit('generateRandomMap')
-  closeMoreMenu()
+  closeDrawer()
 }
 
 function openRandomMapConfig(): void {
   emit('openRandomMapConfig')
-  closeMoreMenu()
+  closeDrawer()
 }
 </script>
 
 <template>
-  <header class="toolbar" :class="{ collapsed: toolbarCollapsed }" data-testid="toolbar">
+  <div class="tabletop-floating-menu" data-testid="toolbar">
     <button
       type="button"
-      class="icon-button toolbar-collapse-button"
-      :aria-label="toolbarCollapsed ? 'Top-Menü einblenden' : 'Top-Menü ausblenden'"
+      class="icon-button tabletop-menu-toggle"
+      :aria-label="toolbarCollapsed ? 'Menü öffnen' : 'Menü schließen'"
+      :aria-expanded="!toolbarCollapsed"
+      aria-controls="tabletop-controls"
       data-testid="toggle-toolbar-button"
       @click="emit('toggleToolbar')"
     >
-      {{ toolbarCollapsed ? '↓' : '↑' }}
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path v-if="toolbarCollapsed" d="M4 6h16M4 12h16M4 18h16" />
+        <path v-else d="M5 5l14 14M19 5L5 19" />
+      </svg>
     </button>
+  </div>
 
-    <template v-if="!toolbarCollapsed">
-      <button
-        v-if="!editorActive"
-        type="button"
-        class="icon-button sidebar-toggle"
-        aria-label="Seitenleiste umschalten"
-        title="Seitenleiste"
-        data-testid="toggle-sidebar-button"
-        @click="emit('toggleSidebar')"
+  <div v-show="!toolbarCollapsed" class="tabletop-menu-layer">
+    <button
+      type="button"
+      class="tabletop-menu-backdrop"
+      aria-label="Menü schließen"
+      tabindex="-1"
+      @click="closeDrawer"
+    />
+    <section
+      id="tabletop-controls"
+      class="tabletop-menu-panel"
+      role="dialog"
+      aria-labelledby="tabletop-menu-title"
+      aria-modal="false"
+    >
+      <div class="tabletop-menu-heading">
+        <div>
+          <strong id="tabletop-menu-title">Werkzeuge</strong>
+          <span>{{ activeMapName }} · {{ activeLevelName }}</span>
+        </div>
+      </div>
+      <div class="tabletop-menu-scroll">
+        <div class="toolbar-menu-section tabletop-map-section">
+    <label class="toolbar-map-select tabletop-map-select" for="map-select">
+      <span>Karte auswählen</span>
+      <select
+        id="map-select"
+        data-testid="map-select"
+        :value="selectedMapId ?? ''"
+        :disabled="editorActive"
+        @change="emit('selectMap', ($event.target as HTMLSelectElement).value); closeDrawer()"
       >
-        ☰
-      </button>
-
-      <label class="toolbar-map-select" for="map-select">
-        <span>Karte</span>
-        <select
-          id="map-select"
-          data-testid="map-select"
-          :value="selectedMapId ?? ''"
-          :disabled="editorActive"
-          @change="emit('selectMap', ($event.target as HTMLSelectElement).value)"
-        >
-          <option v-for="map in maps" :key="map.id" :value="map.id">{{ map.name }}</option>
-        </select>
-      </label>
-
-      <button
-        v-if="!editorActive"
-        type="button"
-        class="map-editor-entry"
-        data-testid="enter-map-editor"
-        title="Karteneditor öffnen"
-        @click="emit('enterMapEditor')"
-      >
-        <span class="toolbar-button-icon" aria-hidden="true">✦</span>
-        <span class="toolbar-button-label">Bearbeiten</span>
-      </button>
-      <span v-else class="map-editor-active-chip" data-testid="map-editor-active-chip">
-        <span class="map-editor-active-label">Bearbeitungsmodus</span>
-        <span class="map-editor-active-label-compact">Editor</span>
-      </span>
-
-      <label v-if="!editorActive" class="toolbar-direct-toggle">
-        <input
-          data-testid="fog-toggle"
-          type="checkbox"
-          :checked="fogEnabled"
-          @change="emit('setFog', ($event.target as HTMLInputElement).checked)"
-        />
-        <span>Fog</span>
-      </label>
-
-      <label v-if="!editorActive" class="toolbar-visibility-mode">
-        <span>Sicht</span>
-        <select
-          data-testid="fog-visibility-mode"
-          :value="visibilityModeValue"
-          :disabled="!fogEnabled"
-          aria-label="Sichtmodus"
-          @change="updateFogVisibilityMode"
-        >
-          <option value="shared">Gemeinsame Sicht</option>
-          <option v-for="player in playerTokens" :key="player.id" :value="`player:${player.id}`">
-            {{ playerVisibilityLabel(player) }}
-          </option>
-        </select>
-        <small v-if="!fogEnabled" class="visually-hidden">Inaktiv: Fog ist aus</small>
-      </label>
-
-      <details ref="moreMenu" class="toolbar-more">
-        <summary data-testid="toolbar-more-button" aria-label="Weitere Kartenfunktionen">
-          Mehr <span aria-hidden="true">⌄</span>
-        </summary>
-        <div class="toolbar-more-content">
+        <option v-for="map in maps" :key="map.id" :value="map.id">{{ map.name }}</option>
+      </select>
+    </label>
+        </div>
+          <div v-if="!editorActive" class="toolbar-menu-section">
+            <strong>Spiel</strong>
+            <button
+              type="button"
+              data-testid="toggle-sidebar-button"
+              @click="emit('toggleSidebar'); closeDrawer()"
+            >
+              Tokens und Zauber öffnen/schließen
+            </button>
+            <label class="toolbar-direct-toggle">
+              <input
+                data-testid="fog-toggle"
+                type="checkbox"
+                :checked="fogEnabled"
+                @change="emit('setFog', ($event.target as HTMLInputElement).checked)"
+              />
+              <span>Fog of War</span>
+            </label>
+            <label class="toolbar-visibility-mode">
+              <span>Sichtmodus</span>
+              <select
+                data-testid="fog-visibility-mode"
+                :value="visibilityModeValue"
+                :disabled="!fogEnabled"
+                aria-label="Sichtmodus"
+                @change="updateFogVisibilityMode"
+              >
+                <option value="shared">Gemeinsame Sicht</option>
+                <option v-for="player in playerTokens" :key="player.id" :value="`player:${player.id}`">
+                  {{ playerVisibilityLabel(player) }}
+                </option>
+              </select>
+              <small v-if="!fogEnabled" class="visually-hidden">Inaktiv: Fog ist aus</small>
+            </label>
+          </div>
           <div class="toolbar-menu-section">
-            <strong>Karte</strong>
+            <strong>Karte und Editor</strong>
+            <button
+              v-if="!editorActive"
+              type="button"
+              class="map-editor-entry"
+              data-testid="enter-map-editor"
+              @click="emit('enterMapEditor'); closeDrawer()"
+            >
+              <span aria-hidden="true">✦</span> Karteneditor öffnen
+            </button>
+            <span v-else class="map-editor-active-chip" data-testid="map-editor-active-chip">
+              Bearbeitungsmodus
+            </span>
             <button
               v-if="!editorActive"
               type="button"
@@ -213,6 +264,24 @@ function openRandomMapConfig(): void {
 
           <div class="toolbar-menu-section">
             <strong>Darstellung</strong>
+            <button
+              type="button"
+              class="tabletop-fullscreen-button"
+              data-testid="fullscreen-button"
+              :aria-pressed="fullscreenActive"
+              :disabled="!fullscreenSupported"
+              @click="toggleFullscreen"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path v-if="!fullscreenActive" d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" />
+                <path v-else d="M3 9h6V3m12 6h-6V3M3 15h6v6m12-6h-6v6" />
+              </svg>
+              {{ fullscreenActive ? 'Vollbild verlassen' : 'Vollbild aktivieren' }}
+            </button>
+            <small v-if="!fullscreenSupported" class="tabletop-menu-note">
+              Dieser Browser unterstützt den Vollbildmodus hier nicht.
+            </small>
+            <small v-if="fullscreenError" class="tabletop-menu-note" role="status">{{ fullscreenError }}</small>
             <button
               v-if="!editorActive"
               type="button"
@@ -300,8 +369,7 @@ function openRandomMapConfig(): void {
               </button>
             </div>
           </details>
-        </div>
-      </details>
-    </template>
-  </header>
+      </div>
+    </section>
+  </div>
 </template>
