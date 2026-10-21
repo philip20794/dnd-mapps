@@ -15,7 +15,7 @@ test('benutzt die Beispielkarte ohne unbehandelte Seitenfehler', async ({ page }
   await page.goto('/')
   await page.getByTestId('map-select').selectOption('alte-krypta')
   await expect(page.getByTestId('map-select')).toHaveValue('alte-krypta')
-  await page.getByTestId('toolbar-more-button').click()
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('reset-menu-button').click()
   await page.getByTestId('reset-session-button').click()
   await expect(page.getByTestId('level-status')).toContainText('Krypta')
@@ -52,13 +52,15 @@ test('benutzt die Beispielkarte ohne unbehandelte Seitenfehler', async ({ page }
   )
   await page.mouse.up()
 
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('fog-toggle').check()
   await expect(page.getByTestId('fog-toggle')).toBeChecked()
   await page.getByTestId('fog-toggle').uncheck()
   await expect(page.getByTestId('fog-toggle')).not.toBeChecked()
 
   await page.getByTestId('toggle-toolbar-button').click()
-  await expect(page.getByTestId('sidebar')).toBeHidden()
+  await expect(page.locator('.tabletop-menu-panel')).toBeHidden()
+  await expect(page.getByTestId('sidebar')).toBeVisible()
 
   expect(pageErrors).toEqual([])
 })
@@ -127,10 +129,10 @@ test('erstellt per Button eine neue Zufallskarte', async ({ page }) => {
 
   await page.goto('/')
   await expect(page.getByTestId('sidebar')).toBeHidden()
-  await page.getByTestId('toolbar-more-button').click()
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('generate-random-map-button').click()
   await expect(page.getByTestId('map-select')).toHaveValue('zufallskarte')
-  await page.getByTestId('toolbar-more-button').click()
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('open-random-map-config-button').click()
   await expect(page.getByTestId('random-map-dialog')).toBeVisible()
   await page.getByTestId('generation-biome-forest').click()
@@ -143,9 +145,9 @@ test('erstellt per Button eine neue Zufallskarte', async ({ page }) => {
     1,
   )
 
-  await page.getByTestId('toolbar-more-button').click()
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('generate-random-map-button').click()
-  await page.getByTestId('toolbar-more-button').click()
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('open-random-map-config-button').click()
   await page.getByTestId('generation-atmosphere-dark').click()
   await page.getByTestId('confirm-random-map-button').click()
@@ -174,6 +176,7 @@ test('bearbeitet Objekte, Wände und Türen mit gemeinsamem Undo-Verlauf', async
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await page.goto('/')
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('enter-map-editor').click()
   await expect(page.getByTestId('map-editor-toolbar')).toBeVisible()
   await page.getByTestId('map-editor-tool-object').click()
@@ -223,6 +226,7 @@ test('malt und radiert Material per Touch als atomare Editoraktionen', async ({ 
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await page.goto('/')
+  await page.getByTestId('toggle-toolbar-button').click()
   await page.getByTestId('enter-map-editor').click()
   await page.getByTestId('map-editor-tool-material-brush').click()
   await page.getByTestId('map-editor-material-shallow-water').click()
@@ -536,12 +540,12 @@ test('passt Toolbar, Karte und ErstellungsmenÃ¼ an alle Ziel-Viewports an', as
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true)
 
-    await page.getByTestId('toolbar-more-button').click()
+    await page.getByTestId('toggle-toolbar-button').click()
     await expect(page.getByTestId('generate-random-map-button')).toBeVisible()
     await page.getByTestId('reset-menu-button').scrollIntoViewIfNeeded()
     await expect(page.getByTestId('reset-menu-button')).toBeVisible()
-    await expectInsideViewport(page, page.getByTestId('toolbar-more-button'))
-    await page.getByTestId('toolbar-more-button').click()
+    await expectInsideViewport(page, page.getByTestId('toggle-toolbar-button'))
+    await page.getByTestId('toggle-toolbar-button').click()
 
     const canvas = page.getByTestId('map-canvas').locator('canvas')
     await canvas.evaluate(async (element) => {
